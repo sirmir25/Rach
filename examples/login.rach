@@ -1,0 +1,14 @@
+import web
+import browser
+import os
+
+rach main(0)
+    detect os()
+    open in browser("https://github.com/")
+    wait seconds(2)
+    login user("ilia") pws("hunter2")
+    fill form id("login") value("ilia")
+    click button("Sign in")
+    completed
+return(end)
+(end0)

@@ -1,0 +1,18 @@
+[package]
+name = "rach"
+version = "0.2.0"
+edition = "2021"
+description = "Rach — write simply, run everywhere"
+authors = ["Rach Project"]
+
+[[bin]]
+name = "rach"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
