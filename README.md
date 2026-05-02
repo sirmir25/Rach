@@ -32,11 +32,31 @@ Rach is a small scripting language focused on automation: system commands, files
 
 ## Installation
 
-Requires Rust 1.70+ and `cargo`. Build:
+Requires Rust 1.70+ and `cargo`. Pick whichever installer matches your environment — all five do the same thing (build `--release`, copy to a system path, verify):
 
 ```bash
-git clone https://github.com/<USER>/rach.git
-cd rach
+git clone https://github.com/sirmir25/Rach.git
+cd Rach
+
+# Linux / macOS / BSD
+./installers/install.sh
+
+# Windows (cmd.exe, run as Administrator if writing to Program Files)
+installers\install.bat
+
+# Cross-platform (Python 3)
+python3 installers/install.py
+
+# Cross-platform (C99 or C++17)
+cc installers/install.c -o /tmp/ri && /tmp/ri
+c++ -std=c++17 installers/install.cpp -o /tmp/ri && /tmp/ri
+```
+
+Each installer takes an optional install dir as its first argument. See [`installers/README.md`](installers/README.md) for details.
+
+Manual build (no installer):
+
+```bash
 cargo build --release
 sudo ln -s "$PWD/target/release/rach" /usr/local/bin/rach
 rach version
