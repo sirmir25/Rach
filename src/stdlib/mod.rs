@@ -2,6 +2,7 @@ pub mod ai;
 pub mod ascii;
 pub mod bash;
 pub mod drivers;
+pub mod native;
 pub mod os;
 pub mod system;
 pub mod web;
@@ -28,6 +29,9 @@ const KNOWN: &[&str] = &[
     // ascii art
     "ascii_banner", "ascii_box", "ascii_pyramid", "ascii_diamond",
     "ascii_border", "ascii_mirror", "ascii_table",
+    // native (C / C++)
+    "native_crc32", "native_base64", "native_sort_ints", "native_reverse",
+    "run_c", "run_cpp",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -180,6 +184,14 @@ pub fn dispatch(
         "ascii_border"  => ascii::border(positional, kwargs, line),
         "ascii_mirror"  => ascii::mirror(positional, line),
         "ascii_table"   => ascii::table(positional, kwargs, line),
+
+        // ---- native (C / C++) ----
+        "native_crc32"     => native::native_crc32(positional, line, ctx),
+        "native_base64"    => native::native_base64(positional, line, ctx),
+        "native_sort_ints" => native::native_sort_ints(positional, line, ctx),
+        "native_reverse"   => native::native_reverse(positional, line, ctx),
+        "run_c"            => native::run_c(positional, line, ctx),
+        "run_cpp"          => native::run_cpp(positional, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{}`", other))),
     }

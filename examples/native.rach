@@ -1,0 +1,25 @@
+import system
+
+rach main(0)
+    # ---- Build-time FFI: C functions linked into the interpreter ----
+    native_crc32("hello world")
+    native_base64("hello, rach")
+
+    # ---- Build-time FFI: C++ functions linked into the interpreter ----
+    native_sort_ints("3,1,4,1,5,9,2,6,5")
+    native_reverse("rach")
+
+    # ---- Capture into a variable ----
+    set hex = native_crc32("rach")
+    create_file("/tmp/rach_native.txt", hex)
+    delete_file("/tmp/rach_native.txt")
+
+    # ---- Runtime spawn: write C, compile via cc, run, capture stdout ----
+    run_c("#include <stdio.h>\nint main(){ printf(\"hi from C %d\\n\", 42); return 0; }")
+
+    # ---- Runtime spawn: C++ ----
+    run_cpp("#include <iostream>\nint main(){ std::cout << \"hi from C++ \" << 3.14 << '\\n'; }")
+
+    completed
+return(end)
+(end0)

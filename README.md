@@ -346,6 +346,26 @@ ai_generate(language="rust", task="simple TCP server")
 
 Supported languages (templates): `bash` (alias `sh`), `python` (`py`), `rust` (`rs`), `c++` (`cpp`/`cxx`), `c`, `zig`. With an API key, any language the model can produce works.
 
+### Native C / C++ interop
+
+The interpreter links C and C++ object code at build time (`native/util.c`, `native/util.cpp` → static libs via `cc-rs` in `build.rs`). Four native functions are exposed as Rach commands:
+
+```
+native_crc32("hello world")          # CRC-32 (C), prints hex string
+native_base64("hello, rach")         # base64 encode (C)
+native_sort_ints("3,1,4,1,5,9,2,6")  # std::sort over signed ints (C++)
+native_reverse("rach")               # byte-level reverse (C++)
+```
+
+For ad-hoc native code, two runtime commands write a temp file, compile via the system `cc` / `c++`, run the binary, and capture stdout:
+
+```
+run_c("#include <stdio.h>\nint main(){ printf(\"hi from C %d\\n\", 42); }")
+run_cpp("#include <iostream>\nint main(){ std::cout << \"hi from C++\\n\"; }")
+```
+
+`CC` / `CXX` env vars override the compiler. Build-time FFI doesn't need `cc` at runtime; `run_c`/`run_cpp` do.
+
 ### ascii (ASCII art)
 
 ```
