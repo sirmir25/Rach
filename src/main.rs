@@ -2,6 +2,7 @@ mod ast;
 mod lexer;
 mod parser;
 mod interpreter;
+mod repl;
 mod stdlib;
 
 use std::env;
@@ -14,6 +15,8 @@ fn print_usage() {
     println!("Rach {} — пиши просто, запускай везде", VERSION);
     println!();
     println!("Usage:");
+    println!("  rach                    open the interactive REPL");
+    println!("  rach repl               same as above");
     println!("  rach <file.rach>        run a Rach script");
     println!("  rach run <file.rach>    same as above");
     println!("  rach check <file.rach>  parse only (no execution)");
@@ -115,11 +118,11 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        print_usage();
-        return ExitCode::SUCCESS;
+        return ExitCode::from(repl::run() as u8);
     }
 
     match args[1].as_str() {
+        "repl" | "console" | "-i" => ExitCode::from(repl::run() as u8),
         "help" | "-h" | "--help" => {
             print_usage();
             ExitCode::SUCCESS

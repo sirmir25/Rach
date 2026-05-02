@@ -144,6 +144,43 @@ fn deserialize_value(s: &str) -> Value {
     Value::Str(s.to_string())
 }
 
+/// Build an empty Ctx for use by the REPL or other embedders. Loads no program.
+pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
+    Ctx {
+        imports: HashSet::new(),
+        current_os: stdlib::os::detect_os_name(),
+        wd: None,
+        wd_unavailable: None,
+        headless: std::env::var("RACH_HEADLESS").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false),
+        scopes: vec![HashMap::new()],
+        functions: HashMap::new(),
+        strict,
+        capturing: false,
+        source,
+        script_path,
+    }
+}
+
+/// Run a parsed program against an *existing* Ctx (variables, functions, and
+/// browser session persist). Used by the REPL.
+pub fn run_in_ctx(program: &Program, ctx: &mut Ctx) -> Result<(), RuntimeError> {
+    // Merge any helper functions defined at top level.
+    for f in &program.functions {
+        ctx.functions.insert(f.name.clone(), f.clone());
+    }
+    // Then run the implicit/explicit main body, if any, in the persistent scopes.
+    if let Some(main) = program.functions.iter().find(|f| f.name == "main") {
+        let result = run_block(&main.body, ctx);
+        match result {
+            Ok(()) => Ok(()),
+            Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(()),
+            Err(e) => Err(e),
+        }
+    } else {
+        Ok(())
+    }
+}
+
 pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), RuntimeError> {
     let known_modules: HashSet<&str> = [
         "web", "browser", "system", "os",
