@@ -9,7 +9,7 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: String,
-    pub arity: u32,
+    pub params: Vec<String>,
     pub body: Vec<Stmt>,
     pub line: usize,
 }
@@ -19,6 +19,7 @@ pub enum Value {
     Str(String),
     Int(i64),
     Bool(bool),
+    List(Vec<Value>),
     Nil,
 }
 
@@ -29,15 +30,47 @@ impl Value {
             Value::Int(i) => i.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Nil => String::new(),
+            Value::List(items) => {
+                let parts: Vec<String> = items.iter().map(|v| v.as_str()).collect();
+                parts.join(", ")
+            }
+        }
+    }
+
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Value::Bool(b) => *b,
+            Value::Nil => false,
+            Value::Int(n) => *n != 0,
+            Value::Str(s) => !s.is_empty(),
+            Value::List(items) => !items.is_empty(),
         }
     }
 }
 
 #[derive(Debug, Clone)]
+pub enum Expr {
+    Lit(Value),
+    Var(String),
+    List(Vec<Expr>),
+    /// A command call as a value-producing expression: `read_file("/tmp/x")`
+    Call {
+        segments: Vec<CallSegment>,
+        line: usize,
+    },
+    /// User function call: `my_fn(x, y)`
+    FnCall {
+        name: String,
+        args: Vec<Expr>,
+        line: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub struct CallSegment {
     pub words: Vec<String>,
-    pub positional: Vec<Value>,
-    pub named: BTreeMap<String, Value>,
+    pub positional: Vec<Expr>,
+    pub named: BTreeMap<String, Expr>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,14 +84,29 @@ pub enum Stmt {
         segments: Vec<CallSegment>,
         line: usize,
     },
-    /// `if linux:` / `if windows:` / `if macos:` — conditional block on detected OS
+    /// `set NAME = <expr>` — variable assignment / capture command output
+    Set {
+        name: String,
+        expr: Expr,
+        line: usize,
+    },
+    /// Old form: `if linux:` / `if windows:` / `if macos:` / new: `if not linux:` /
+    /// optionally followed by `else:`
     IfOs {
         os: String,
+        negate: bool,
+        body: Vec<Stmt>,
+        else_body: Option<Vec<Stmt>>,
+        line: usize,
+    },
+    /// `for x in <expr>:`
+    For {
+        var: String,
+        iter: Expr,
         body: Vec<Stmt>,
         line: usize,
     },
-    /// `bash = generate ...` / `bash = search ...` / `bash = web search site ...`
-    /// `bash = complete or error`
+    /// `bash = generate ...` etc.
     BashDsl {
         action: BashAction,
         argument: String,
@@ -68,22 +116,22 @@ pub enum Stmt {
     Completed { line: usize },
     /// `error 409 string 12`
     Error { code: i64, line_ref: i64, line: usize },
-    /// AI generation: ai_generate(language="bash", task="...")
+    /// `ai_generate(language="bash", task="...")`
     AiGenerate {
         language: String,
         task: String,
         line: usize,
     },
+    /// `return <expr>` inside a user function
+    Return { expr: Option<Expr>, line: usize },
+    /// Bare expression statement: a user-function call producing side effects.
+    ExprStmt { expr: Expr, line: usize },
 }
 
 #[derive(Debug, Clone)]
 pub enum BashAction {
-    /// Generate a bash snippet via the built-in generator
     Generate,
-    /// Search for a tool / command
     Search,
-    /// Web search (e.g. `web search site ohmyzsh`)
     WebSearch,
-    /// Status: `complete or error`
     CompleteOrError,
 }

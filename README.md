@@ -1,38 +1,38 @@
 # Rach
 
-> Пиши просто — запускай везде.
+> Write simply — run anywhere.
 
-Rach — маленький скриптовый язык с фокусом на автоматизацию: системные команды, файлы, браузер (через настоящий W3C WebDriver), генерация bash и кода на других языках. Интерпретатор написан на Rust, один статически слинкованный бинарь, без рантайм-зависимостей кроме `curl`/`tar`/`unzip` для авто-установки веб-драйверов.
+Rach is a small scripting language focused on automation: system commands, files, browsers (via real W3C WebDriver), generation of bash and code in other languages. The interpreter is written in Rust, a single statically-linked binary, with no runtime dependencies except `curl`/`tar`/`unzip` for auto-installing web drivers.
 
 ---
 
-## Содержание
+## Contents
 
-- [Установка](#установка)
+- [Installation](#installation)
 - [Hello, world](#hello-world)
-- [Структура скрипта](#структура-скрипта)
-- [Модули (import)](#модули-import)
-- [Команды стандартной библиотеки](#команды-стандартной-библиотеки)
+- [Script structure](#script-structure)
+- [Modules (import)](#modules-import)
+- [Standard library commands](#standard-library-commands)
   - [os / system](#os--system)
-  - [Файлы](#файлы)
+  - [Files](#files)
   - [run_command / install_package](#run_command--install_package)
-  - [Браузер (WebDriver)](#браузер-webdriver)
+  - [Browser (WebDriver)](#browser-webdriver)
   - [bash DSL](#bash-dsl)
   - [ai_generate](#ai_generate)
-- [Управление потоком: `if linux/macos/windows`](#управление-потоком-if-linuxmacoswindows)
-- [Соглашение об ошибках](#соглашение-об-ошибках)
-- [Переменные окружения](#переменные-окружения)
-- [Сборка из исходников](#сборка-из-исходников)
+- [Flow control: `if linux/macos/windows`](#flow-control-if-linuxmacoswindows)
+- [Error convention](#error-convention)
+- [Environment variables](#environment-variables)
+- [Building from source](#building-from-source)
 - [CLI](#cli)
-- [Грамматика (формально)](#грамматика-формально)
-- [Ограничения и не-цели](#ограничения-и-не-цели)
-- [Лицензия](#лицензия)
+- [Grammar (formal)](#grammar-formal)
+- [Limitations and non-goals](#limitations-and-non-goals)
+- [License](#license)
 
 ---
 
-## Установка
+## Installation
 
-Нужен Rust 1.70+ и `cargo`. Сборка:
+Requires Rust 1.70+ and `cargo`. Build:
 
 ```bash
 git clone https://github.com/<USER>/rach.git
@@ -42,13 +42,13 @@ sudo ln -s "$PWD/target/release/rach" /usr/local/bin/rach
 rach version
 ```
 
-Для автоматизации браузера также нужен один из:
-- Chrome или Chromium (тогда `chromedriver` скачается автоматически)
-- Firefox (тогда `geckodriver` скачается автоматически)
-- Microsoft Edge с уже установленным `msedgedriver`
-- Safari + `safaridriver --enable` + галка "Allow Remote Automation" в Develop меню
+For browser automation you also need one of:
+- Chrome or Chromium (then `chromedriver` is downloaded automatically)
+- Firefox (then `geckodriver` is downloaded automatically)
+- Microsoft Edge with `msedgedriver` already installed
+- Safari + `safaridriver --enable` + "Allow Remote Automation" checkbox in the Develop menu
 
-`curl`, `tar`, `unzip` должны быть в PATH (на macOS/Linux есть из коробки).
+`curl`, `tar`, `unzip` must be in PATH (available out of the box on macOS/Linux).
 
 ---
 
@@ -62,79 +62,142 @@ import system
 
 rach main(0)
     detect os()
-    create_file("/tmp/hello.txt", "привет от Rach")
+    create_file("/tmp/hello.txt", "hello from Rach")
     read_file("/tmp/hello.txt")
     completed
 return(end)
 (end0)
 ```
 
-Запуск:
+Run:
 
 ```bash
 rach hello.rach
 ```
 
-Вывод:
+Output:
 
 ```
 os: macos
 completed
 created: /tmp/hello.txt
 completed
-привет от Rach
+hello from Rach
 completed
 completed
 ```
 
 ---
 
-## Структура скрипта
+## Script structure
 
-Каждый файл `.rach` — это:
+Each `.rach` file is:
 
 ```
-import <модуль1>
-import <модуль2>
+import <module1>
+import <module2>
 ...
 
-rach <имя>(<арность>)
-    <команды>
+rach <name>(<arity>)
+    <commands>
 return(end)
 (end<N>)
 ```
 
-Правила:
+Rules:
 
-- В файле должна быть функция с именем `main` — с неё начинается выполнение.
-- `<арность>` — целое число; пока всегда `0` (аргументы функций ещё не реализованы, но синтаксис уже поддерживает).
-- `return(end)` отмечает конец тела функции, `(end0)` — конец файла. `(end0)`, `(end1)` и т.п. эквивалентны: суффиксная цифра не несёт смысла, она просто часть синтаксической метки.
-- Комментарии: `#` или `//` до конца строки.
-- Отступы значимы только внутри блоков `if linux/macos/windows`.
+- A file must contain a function named `main` — execution starts there.
+- `<arity>` is an integer; always `0` for now (function arguments are not yet implemented, but the syntax already supports them).
+- `return(end)` marks the end of the function body, `(end0)` — the end of the file. `(end0)`, `(end1)` etc. are equivalent: the trailing digit carries no meaning, it's just part of the syntactic label.
+- Comments: `#` or `//` until end of line.
+- Indentation is significant only inside `if linux/macos/windows` blocks.
 
 ---
 
-## Модули (import)
+## Modules (import)
 
-Импорты — декларативные. Они не загружают кода (стандартная библиотека всегда вкомпилирована в интерпретатор), но служат документацией намерений. Неизвестные модули вызывают warning, но не ошибку.
+Imports are declarative. They don't load code (the standard library is always compiled into the interpreter), but serve as documentation of intent. Unknown modules trigger a warning, but not an error.
 
-| Модуль       | Что объявляет                                     |
+| Module       | What it declares                                  |
 |--------------|---------------------------------------------------|
-| `os`         | `detect_os`, проверки `if linux/macos/windows`    |
-| `system`     | файлы, `run_command`, `install_package`, `reboot` |
-| `web`        | автоматизация браузера                            |
-| `browser`    | синоним для `web` (alias по смыслу)               |
-| `linux`      | OS-специфичный namespace                          |
-| `windows`    | OS-специфичный namespace                          |
-| `macos`      | OS-специфичный namespace                          |
-| `bash`       | DSL `bash = generate ...`                         |
+| `os`         | `detect_os`, `if linux/macos/windows` checks      |
+| `system`     | files, `run_command`, `install_package`, `reboot` |
+| `web`        | browser automation                                |
+| `browser`    | alias for `web` (semantic alias)                  |
+| `linux`      | OS-specific namespace                             |
+| `windows`    | OS-specific namespace                             |
+| `macos`      | OS-specific namespace                             |
+| `bash`       | `bash = generate ...` DSL                         |
 | `ai`         | `ai_generate(...)`                                |
+| `ascii`      | ASCII-art generators (banner, box, table, etc.)   |
 
 ---
 
-## Команды стандартной библиотеки
+## Variables and user functions
 
-Команды в Rach пишутся "по-английски": несколько слов подряд образуют имя команды, скобки — аргументы. Пример:
+`set NAME = <expr>` captures a value. Right-hand side can be a literal, a list, a command call, or another variable.
+
+```
+set os_name = detect_os()
+set message = read_file("/tmp/notes.txt")
+set urls = ["https://a", "https://b", "https://c"]
+```
+
+When a variable is on the RHS of `set`, the command runs in **capturing mode** — it returns its result without printing the usual side-effect output.
+
+User functions are declared with named params and may `return <expr>`:
+
+```
+rach square(x)
+    set result = run_command("echo squared")
+    return result
+return(end)
+(end0)
+```
+
+Call them like commands the parser doesn't already know: `set y = square(7)`.
+
+---
+
+## Loops: `for x in <expr>:`
+
+Iterate over a list literal, a captured list variable, or a non-negative integer (which yields `0..N`):
+
+```
+for url in ["https://one", "https://two"]:
+    open in browser(url)
+
+set urls = ["a", "b", "c"]
+for u in urls:
+    run_command("echo visited")
+
+for i in 3:
+    create_file("/tmp/file", "x")
+```
+
+Strings split on commas: `for tag in "a,b,c":` yields `a`, `b`, `c`.
+
+---
+
+## Conditionals: `if`, `if not`, `else`
+
+```
+if linux:
+    run_command("apt-get update")
+else:
+    run_command("brew update")
+
+if not windows:
+    run_command("uname -a")
+```
+
+Only OS checks are supported (still no general-purpose conditions). Combine `if` + `else` and `if not`/`else` to cover all branches.
+
+---
+
+## Standard library commands
+
+Commands in Rach are written "in English": several words in a row form the command name, parentheses are arguments. Example:
 
 ```
 open in browser("https://example.com")   // → open_in_browser("https://...")
@@ -142,25 +205,25 @@ fill form id("login") value("ilia")      // → fill_form, kwargs id=..., value=
 wait seconds(3)                          // → wait_seconds(3)
 ```
 
-Имя команды разрешается интерпретатором: ищется самый длинный префикс из слов, совпадающий с известной командой. Остальные слова + их `(...)` становятся keyword-аргументами.
+The command name is resolved by the interpreter: it searches for the longest prefix of words matching a known command. The remaining words + their `(...)` become keyword arguments.
 
 ### os / system
 
-| Команда                  | Что делает                                                      |
+| Command                  | What it does                                                    |
 |--------------------------|------------------------------------------------------------------|
-| `detect os()`            | Печатает текущую ОС: `linux`, `macos`, `windows`, `bsd`         |
-| `reboot()`               | Печатает намерение перезагрузки (без выполнения — безопасность) |
-| `shutdown()`             | Аналогично, без выполнения                                      |
+| `detect os()`            | Prints the current OS: `linux`, `macos`, `windows`, `bsd`       |
+| `reboot()`               | Prints reboot intent (without executing — for safety)           |
+| `shutdown()`             | Same, no execution                                              |
 
-### Файлы
+### Files
 
-| Команда                                     | Эффект                                |
+| Command                                     | Effect                                |
 |---------------------------------------------|----------------------------------------|
-| `create_file("/path", "содержимое")`        | Создаёт файл, перезаписывает если есть |
-| `read_file("/path")`                        | Печатает содержимое                    |
-| `edit_file("/path", "новое содержимое")`    | Перезаписывает                         |
-| `delete_file("/path")`                      | Удаляет                                |
-| `check_if_exists("/path")`                  | Печатает `exists` или `missing`        |
+| `create_file("/path", "content")`           | Creates a file, overwrites if exists  |
+| `read_file("/path")`                        | Prints the contents                   |
+| `edit_file("/path", "new content")`         | Overwrites                            |
+| `delete_file("/path")`                      | Deletes                               |
+| `check_if_exists("/path")`                  | Prints `exists` or `missing`          |
 
 ### run_command / install_package
 
@@ -169,112 +232,118 @@ run_command("ls -la /tmp")
 install_package("htop")
 ```
 
-`run_command` запускает команду через `sh -c` (на Windows — `cmd /C`) и печатает stdout/stderr.
+`run_command` runs the command via `sh -c` (on Windows — `cmd /C`) and prints stdout/stderr.
 
-`install_package` подбирает менеджер пакетов под ОС:
+`install_package` picks a package manager based on the OS:
 
-| ОС      | Команда                                       |
+| OS      | Command                                       |
 |---------|-----------------------------------------------|
 | macOS   | `brew install <pkg>`                          |
-| Linux   | `apt-get` / `dnf` / `pacman` / `zypper` / `apk` (под sudo) |
+| Linux   | `apt-get` / `dnf` / `pacman` / `zypper` / `apk` (under sudo) |
 | Windows | `winget install --silent <pkg>`               |
 | BSD     | `pkg install -y <pkg>`                        |
 
-Установка реально выполняется. Чтобы запустить только в режиме "что было бы сделано":
+Installation actually runs. To run only in "what would be done" mode:
 
 ```bash
 RACH_DRY_RUN=1 rach install.rach
 ```
 
-### Браузер (WebDriver)
+### Browser (WebDriver)
 
-Все команды браузера ходят через настоящий [W3C WebDriver](https://www.w3.org/TR/webdriver2/) (HTTP-протокол). Драйвер запускается автоматически при первой браузерной команде:
+All browser commands go through real [W3C WebDriver](https://www.w3.org/TR/webdriver2/) (HTTP protocol). The driver is started automatically on the first browser command:
 
-1. Если `chromedriver`/`geckodriver`/`msedgedriver` есть в PATH — используется он.
-2. Иначе ищется в кэше `~/Library/Caches/rach/drivers/` (на Linux — `~/.cache/rach/drivers/`).
-3. Иначе скачивается:
-   - `chromedriver` — через [Chrome for Testing API](https://googlechromelabs.github.io/chrome-for-testing/), если установлен Chrome/Chromium.
-   - `geckodriver` v0.36.0 с GitHub Releases, если установлен Firefox.
+1. If `chromedriver`/`geckodriver`/`msedgedriver` is in PATH — it is used.
+2. Otherwise it's looked for in the cache `~/Library/Caches/rach/drivers/` (on Linux — `~/.cache/rach/drivers/`).
+3. Otherwise it is downloaded:
+   - `chromedriver` — via the [Chrome for Testing API](https://googlechromelabs.github.io/chrome-for-testing/), if Chrome/Chromium is installed.
+   - `geckodriver` v0.36.0 from GitHub Releases, if Firefox is installed.
 
-Список команд:
+Command list:
 
-| Команда                                              | Что делает                                          |
+| Command                                              | What it does                                        |
 |------------------------------------------------------|------------------------------------------------------|
-| `open in browser("url")`                             | Запустить любой доступный браузер и открыть URL     |
-| `open in chrome("url")` / `firefox` / `edge` / `safari` | Принудительно конкретный браузер                |
-| `navigate to("url")`                                 | Перейти на URL в текущей вкладке                    |
-| `open new tab("url")`                                | Новая вкладка                                       |
-| `switch tab(2)`                                      | Переключиться на вкладку #N (1-индексация)          |
-| `wait seconds(N)`                                    | Подождать (макс. 600)                               |
-| `scroll down pixels(600)`                            | Прокрутить через `window.scrollBy`                  |
-| `take screenshot("/tmp/x.png")`                      | Скриншот через WebDriver, PNG                       |
-| `press key("Enter")`                                 | Послать спец-клавишу активному элементу             |
-| `click button("Sign in")`                            | Найти кнопку по тексту и кликнуть                   |
-| `click element("#submit")` / `(".cls")` / `("//xpath")` | Кликнуть по селектору                            |
-| `type text("input_id", "текст")`                     | Напечатать в элемент                                |
-| `fill form id("login") value("ivan")`                | Найти по id/name, очистить, ввести                  |
-| `login user("ivan") pws("secret")`                   | Найти типичные поля login+password, нажать Enter    |
-| `execute js("return document.title")`                | Выполнить JS, напечатать результат                  |
-| `download file("url", "/path")`                      | Скачать через `curl -L`                             |
-| `upload file("/local/path", "input_id")`             | Через `send_keys` в `<input type=file>`             |
+| `open in browser("url")`                             | Launch any available browser and open URL           |
+| `open in chrome("url")` / `firefox` / `edge` / `safari` | Force a specific browser                         |
+| `navigate to("url")`                                 | Go to URL in the current tab                        |
+| `open new tab("url")`                                | New tab                                             |
+| `switch tab(2)`                                      | Switch to tab #N (1-indexed)                        |
+| `wait seconds(N)`                                    | Wait (max 600)                                      |
+| `scroll down pixels(600)`                            | Scroll via `window.scrollBy`                        |
+| `take screenshot("/tmp/x.png")`                      | Screenshot via WebDriver, PNG                       |
+| `press key("Enter")`                                 | Send a special key to the active element            |
+| `click button("Sign in")`                            | Find a button by text and click                     |
+| `click element("#submit")` / `(".cls")` / `("//xpath")` | Click by selector                                |
+| `type text("input_id", "text")`                      | Type into element                                   |
+| `fill form id("login") value("ivan")`                | Find by id/name, clear, type                        |
+| `login user("ivan") pws("secret")`                   | Find typical login+password fields, press Enter     |
+| `execute js("return document.title")`                | Execute JS, print result                            |
+| `download file("url", "/path")`                      | Download via `curl -L`                              |
+| `upload file("/local/path", "input_id")`             | Via `send_keys` into `<input type=file>`            |
 
-Поддерживаемые имена клавиш для `press key`: `Enter/Return`, `Tab`, `Escape/Esc`, `Space`, `Backspace`, `Delete`, `Up/Down/Left/Right` (с/без `Arrow_` префикса), `Home`, `End`, `PageUp`, `PageDown`.
+Supported key names for `press key`: `Enter/Return`, `Tab`, `Escape/Esc`, `Space`, `Backspace`, `Delete`, `Up/Down/Left/Right` (with/without `Arrow_` prefix), `Home`, `End`, `PageUp`, `PageDown`.
 
-Стратегии селекторов в `click_element`/`type_text`/`fill_form`:
+Selector strategies in `click_element`/`type_text`/`fill_form`:
 
-- начинается с `/` — XPath
-- начинается с `#`, `.`, или содержит пробел/`[` — CSS selector
-- иначе — `[id='X'],[name='X']`
+- starts with `/` — XPath
+- starts with `#`, `.`, or contains a space/`[` — CSS selector
+- otherwise — `[id='X'],[name='X']`
 
-Headless-режим:
+Headless mode:
 
 ```bash
 RACH_HEADLESS=1 rach script.rach
 ```
 
-(Поддерживается для Chrome/Edge/Firefox; Safari headless не умеет.)
+(Supported for Chrome/Edge/Firefox; Safari can't do headless.)
 
 ### bash DSL
 
-Внутри тела `main` можно встретить присваивания вида `<что_угодно> = <действие> <текст>`:
+Inside the body of `main` you can encounter assignments of the form `<anything> = <action> <text>`:
 
 ```
-bash = generate install oh my zsh           # Сгенерирует один-лайнер
-bash = search curl or wget                  # Кратко "что есть в системе для X"
-bash = web search site ohmyzsh              # Лог намерения веб-поиска (запросов не шлёт)
-bash = complete or error                    # Просто печатает `completed`
+bash = generate install oh my zsh           # Generates a one-liner
+bash = search curl or wget                  # Briefly "what's in the system for X"
+bash = web search site ohmyzsh              # Logs intent of a web search (sends no requests)
+bash = complete or error                    # Just prints `completed`
 ```
 
-Это намеренно слабый, эвристический DSL — для коротких заметок и подсказок. Для реального исполнения bash используй `run_command("...")`.
+This is intentionally a weak, heuristic DSL — for short notes and hints. For real bash execution use `run_command("...")`.
 
-Распознаваемые задачи в `generate`: oh-my-zsh, homebrew, curl/wget, обновление apt, диск/память/CPU. Остальное даёт `# TODO: ...`-стаб.
+Recognized tasks in `generate`: oh-my-zsh, homebrew, curl/wget, apt update, disk/memory/CPU. Anything else yields a `# TODO: ...` stub.
 
 ### ai_generate
 
-Встроенный шаблонный генератор кода. Не ходит в сеть, не вызывает LLM — это библиотека готовых сниппетов для частых задач.
+Two backends:
+
+1. **Live LLM (Claude)**: if `ANTHROPIC_API_KEY` is set, the call goes to `https://api.anthropic.com/v1/messages` via `curl`. Default model is `claude-haiku-4-5-20251001`; override with `RACH_LLM_MODEL`.
+2. **Templates** (offline fallback): canned snippets for canonical tasks.
 
 ```
-ai_generate(language="bash", task="установить oh-my-zsh на Linux")
-ai_generate(language="rust", task="простой TCP сервер")
-ai_generate(language="python", task="простой парсер JSON")
+ai_generate(language="bash", task="install oh-my-zsh on Linux")
+ai_generate(language="rust", task="simple TCP server")
 ```
 
-Поддерживаемые языки: `bash` (alias `sh`), `python` (`py`), `rust` (`rs`), `c++` (`cpp`/`cxx`), `c`, `zig`.
+Supported languages (templates): `bash` (alias `sh`), `python` (`py`), `rust` (`rs`), `c++` (`cpp`/`cxx`), `c`, `zig`. With an API key, any language the model can produce works.
 
-Распознаваемые задачи:
-- `bash`: oh-my-zsh, обновление пакетов
-- `python`: TCP-сервер, парсинг JSON
-- `rust`: TCP-сервер, копирование файлов
-- `c++`/`c`: копирование файлов
-- `zig`: парсинг JSON
+### ascii (ASCII art)
 
-Для всего остального возвращает корректный TODO-стаб.
+```
+ascii banner("HELLO")                                    # 5-line block letters
+ascii box("text", title="WARN", style="rounded")         # bordered box
+ascii pyramid("X")                                       # pyramid of repeated chars
+ascii diamond("X")                                       # diamond shape
+ascii mirror("text")                                     # text + reversed copy
+ascii table(headers="Name,Age", rows="Ivan,25;Maria,30") # formatted table
+```
+
+Border styles for `ascii box`: `single` (default), `double`, `bold`, `rounded`, `ascii`, `stars`, `hash`.
 
 ---
 
-## Управление потоком: `if linux/macos/windows`
+## Flow control: `if linux/macos/windows`
 
-Единственный условный оператор — проверка ОС:
+The only conditional operator — an OS check:
 
 ```
 rach main(0)
@@ -290,96 +359,99 @@ return(end)
 (end0)
 ```
 
-Тело блока — все строки с отступом больше, чем у `if`. Пустых блоков `else` нет — пиши несколько отдельных `if`.
+The block body — all lines indented more than the `if`. There are no empty `else` blocks — write multiple separate `if`s.
 
-`macos` синонимичен `darwin`.
+`macos` is synonymous with `darwin`.
 
 ---
 
-## Соглашение об ошибках
+## Error convention
 
-Каждая команда после успеха печатает `completed`. После неуспеха — строку вида:
+Every command after success prints `completed`. After failure — a line of the form:
 
 ```
-error <код> string <номер_строки>  // <пояснение>
+error <code> string <line_number>  // <explanation>
 ```
 
-Коды близки по смыслу к HTTP:
+Codes are close in meaning to HTTP:
 
-| Код  | Значение                                        |
+| Code | Meaning                                         |
 |------|--------------------------------------------------|
-| 400  | Плохой ввод (некорректные аргументы)            |
-| 404  | Не найдено (файл, команда, элемент DOM)         |
-| 409  | Конфликт состояния (нет активной браузерной сессии) |
-| 422  | Синтаксическая ошибка парсера                   |
-| 500  | Внутренняя ошибка (I/O, спавн процесса)         |
-| 501  | Не реализовано на этой ОС                       |
-| 502  | Подсистема упала (внешний драйвер, сеть)        |
-| 503  | Сервис недоступен (не удалось поднять WebDriver)|
+| 400  | Bad input (invalid arguments)                   |
+| 404  | Not found (file, command, DOM element)          |
+| 409  | State conflict (no active browser session)      |
+| 422  | Parser syntax error                             |
+| 500  | Internal error (I/O, process spawn)             |
+| 501  | Not implemented on this OS                      |
+| 502  | Subsystem failure (external driver, network)    |
+| 503  | Service unavailable (couldn't start WebDriver)  |
 
-Можно вручную поднять ошибку:
+You can manually raise an error:
 
 ```
 error 409 string 12
 ```
 
-— это просто печатает строку (не прерывает выполнение).
+— this just prints the line (does not interrupt execution).
 
 ---
 
-## Переменные окружения
+## Environment variables
 
-| Переменная             | Что делает                                                  |
+| Variable               | What it does                                                |
 |------------------------|-------------------------------------------------------------|
-| `RACH_HEADLESS`        | `1` — запустить браузер в headless-режиме                  |
-| `RACH_DRY_RUN`         | `1` — `install_package` только печатает команду, не запускает |
-| `RACH_DRIVER_DIR`      | Папка для кэша скачанных WebDriver-бинарников               |
+| `RACH_HEADLESS`        | `1` — start the browser in headless mode                    |
+| `RACH_DRY_RUN`         | `1` — `install_package` only prints the command, doesn't run it |
+| `RACH_DRIVER_DIR`      | Directory for the cache of downloaded WebDriver binaries    |
+| `RACH_STRICT`          | `1` — `error N` aborts execution (otherwise just printed)   |
+| `ANTHROPIC_API_KEY`    | If set, `ai_generate` calls Claude via `curl` instead of using templates |
+| `RACH_LLM_MODEL`       | Override the Claude model used by `ai_generate` (default: `claude-haiku-4-5-20251001`) |
 
 ---
 
-## Сборка из исходников
+## Building from source
 
 ```bash
 cargo build --release
 ./target/release/rach examples/hello.rach
 ```
 
-Зависимости: только `serde_json`. Всё остальное — `std`.
+Dependencies: only `serde_json`. Everything else — `std`.
 
-Кросс-компиляция:
+Cross-compilation:
 
 ```bash
 rustup target add x86_64-unknown-linux-musl
 cargo build --release --target x86_64-unknown-linux-musl
 ```
 
-Получаешь статически слинкованный бинарь, который запустится на любом Linux без glibc-вопросов.
+You get a statically-linked binary that runs on any Linux without glibc concerns.
 
 ---
 
 ## CLI
 
 ```
-rach <file.rach>          запустить скрипт
-rach run <file.rach>      то же самое
-rach check <file.rach>    только проверить синтаксис, без выполнения
-rach version              вывести версию
-rach help                 краткая справка
+rach <file.rach>          run the script
+rach run <file.rach>      same thing
+rach check <file.rach>    only check syntax, no execution
+rach version              print version
+rach help                 brief help
 ```
 
-Коды выхода:
+Exit codes:
 
-| Код | Когда                                |
-|-----|---------------------------------------|
-| 0   | Успешно                              |
-| 1   | Ошибка времени выполнения            |
-| 2   | Не удалось прочитать файл            |
-| 3   | Лексическая ошибка                   |
-| 4   | Ошибка парсинга                      |
+| Code | When                                  |
+|------|----------------------------------------|
+| 0    | Success                               |
+| 1    | Runtime error                         |
+| 2    | Failed to read file                   |
+| 3    | Lexical error                         |
+| 4    | Parse error                           |
 
 ---
 
-## Грамматика (формально)
+## Grammar (formal)
 
 ```
 program       := { import_line } { function }
@@ -408,27 +480,23 @@ arg_list      := arg { "," arg }
 arg           := STRING | INT | IDENT | IDENT "=" (STRING | INT | IDENT)
 ```
 
-Лексер рассматривает `\n` как значимый разделитель. Идентификаторы — `[A-Za-z_][A-Za-z0-9_]*`. Строки — двойные кавычки с поддержкой `\\`, `\"`, `\n`, `\t`, `\r`. Числа — целые, со знаком.
+The lexer treats `\n` as a significant separator. Identifiers — `[A-Za-z_][A-Za-z0-9_]*`. Strings — double-quoted with support for `\\`, `\"`, `\n`, `\t`, `\r`. Numbers — signed integers.
 
 ---
 
-## Ограничения и не-цели
+## Limitations and non-goals
 
-Сейчас в Rach **нет**:
+Currently Rach has **no**:
 
-- Переменных и присваиваний (кроме `bash =` DSL — но это не настоящая переменная).
-- Арифметики, строк-операций, сравнений.
-- Циклов и пользовательских условий (только `if linux/macos/windows`).
-- Пользовательских функций кроме `main`.
-- Импорта собственных файлов.
-- Реальных аргументов функций.
-- Try/catch — ошибки печатаются, не прерывают выполнение.
-- LLM в `ai_generate` — это шаблоны.
+- Arithmetic, string operations, comparisons.
+- User-defined conditions beyond OS checks (`if linux/macos/windows`, `if not <os>`, `else`).
+- Importing your own files.
+- Try/catch — errors are printed by default; with `RACH_STRICT=1` they abort.
 
-Это намеренно: язык задуман как декларативный скрипт-DSL для автоматизации, не как general-purpose. Если нужна логика — пиши `run_command("python3 -c '...'")` или `ai_generate(language="python", task="...")` и пусть Python делает работу.
+This is intentional: the language is designed as a declarative script DSL for automation, not as general-purpose. If you need logic — write `run_command("python3 -c '...'")` or `ai_generate(language="python", task="...")` and let Python do the work.
 
 ---
 
-## Лицензия
+## License
 
-TBD. Рекомендую MIT или Apache-2.0. Без `LICENSE` в репозитории код юридически не переиспользуем.
+TBD. MIT or Apache-2.0 recommended. Without a `LICENSE` in the repo the code is not legally reusable.

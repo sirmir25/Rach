@@ -45,14 +45,14 @@ fn session(ctx: &Ctx, line: usize) -> Result<&webdriver::Session, RuntimeError> 
 
 // ---------- Public entry points ----------
 
-pub fn open_in_browser(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<(), RuntimeError> {
+pub fn open_in_browser(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
     let url = first_str(args, line, "open_in_browser")?;
     match ensure_session(ctx, None, line) {
         Ok(s) => {
             s.navigate(&url).map_err(|e| RuntimeError::new(502, line, format!("navigate: {}", e)))?;
             println!("opened: {}", url);
             println!("completed");
-            Ok(())
+            Ok(Value::Nil)
         }
         Err(driver_err) => {
             // Fallback: best-effort OS-default open. Lets simple "just visit a URL"
@@ -64,34 +64,34 @@ pub fn open_in_browser(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<(),
     }
 }
 
-pub fn open_in(browser: &str, args: &[Value], line: usize, ctx: &mut Ctx) -> Result<(), RuntimeError> {
+pub fn open_in(browser: &str, args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
     let url = first_str(args, line, "open_in_<browser>")?;
     let s = ensure_session(ctx, Some(browser), line)?;
     s.navigate(&url).map_err(|e| RuntimeError::new(502, line, format!("navigate: {}", e)))?;
     println!("opened in {}: {}", browser, url);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn navigate_to(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn navigate_to(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let url = first_str(args, line, "navigate_to")?;
     let s = session(ctx, line)?;
     s.navigate(&url).map_err(|e| RuntimeError::new(502, line, format!("navigate: {}", e)))?;
     println!("navigated: {}", url);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn open_new_tab(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<(), RuntimeError> {
+pub fn open_new_tab(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
     let url = first_str(args, line, "open_new_tab")?;
     let s = ensure_session(ctx, None, line)?;
     s.new_window(&url).map_err(|e| RuntimeError::new(502, line, format!("new tab: {}", e)))?;
     println!("new tab: {}", url);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn switch_tab(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn switch_tab(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let n_str = first_str(args, line, "switch_tab")?;
     let n: usize = n_str.parse().map_err(|_| RuntimeError::new(400, line, format!("switch_tab: bad index `{}`", n_str)))?;
     let s = session(ctx, line)?;
@@ -102,10 +102,10 @@ pub fn switch_tab(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeE
     s.switch_to_window(handle).map_err(|e| RuntimeError::new(502, line, format!("switch: {}", e)))?;
     println!("switched to tab {}", n);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn wait_seconds(args: &[Value], line: usize) -> Result<(), RuntimeError> {
+pub fn wait_seconds(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let s = first_str(args, line, "wait_seconds")?;
     let secs: u64 = s.parse().map_err(|_| RuntimeError::new(400, line, format!("wait_seconds: bad number `{}`", s)))?;
     if secs > 600 {
@@ -114,26 +114,26 @@ pub fn wait_seconds(args: &[Value], line: usize) -> Result<(), RuntimeError> {
     thread::sleep(Duration::from_secs(secs));
     println!("waited {}s", secs);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn scroll_down_pixels(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn scroll_down_pixels(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let p_str = first_str(args, line, "scroll_down_pixels")?;
     let s = session(ctx, line)?;
     let script = format!("window.scrollBy(0, {});", p_str.parse::<i64>().unwrap_or(0));
     s.execute_script(&script).map_err(|e| RuntimeError::new(502, line, format!("scroll: {}", e)))?;
     println!("scrolled {} px", p_str);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn take_screenshot(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn take_screenshot(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let path = first_str(args, line, "take_screenshot")?;
     if let Some(s) = ctx.wd.as_ref() {
         s.screenshot(&path).map_err(|e| RuntimeError::new(502, line, format!("screenshot: {}", e)))?;
         println!("screenshot: {}", path);
         println!("completed");
-        return Ok(());
+        return Ok(Value::Nil);
     }
     // No driver session — fall back to OS-level screenshot if available.
     if cfg!(target_os = "macos") {
@@ -141,13 +141,13 @@ pub fn take_screenshot(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), Run
         if matches!(r, Ok(s) if s.success()) {
             println!("screenshot: {}", path);
             println!("completed");
-            return Ok(());
+            return Ok(Value::Nil);
         }
     }
     Err(RuntimeError::new(502, line, "no browser session and no OS screenshot tool"))
 }
 
-pub fn press_key(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn press_key(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let k = first_str(args, line, "press_key")?;
     let s = session(ctx, line)?;
     let unicode = key_to_unicode(&k)
@@ -155,10 +155,10 @@ pub fn press_key(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeEr
     s.active_element_send_keys(unicode).map_err(|e| RuntimeError::new(502, line, format!("press_key: {}", e)))?;
     println!("pressed: {}", k);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn click_button(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn click_button(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let label = first_str(args, line, "click_button")?;
     let s = session(ctx, line)?;
     // Match buttons by visible text. Covers <button>X</button>, <input type=submit value=X>, and aria-labelled controls.
@@ -175,10 +175,10 @@ pub fn click_button(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), Runtim
     s.click(&eid).map_err(|e| RuntimeError::new(502, line, format!("click: {}", e)))?;
     println!("clicked button: {}", label);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn click_element(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn click_element(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let sel = first_str(args, line, "click_element")?;
     let s = session(ctx, line)?;
     let (by, value) = guess_locator(&sel);
@@ -187,10 +187,10 @@ pub fn click_element(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), Runti
     s.click(&eid).map_err(|e| RuntimeError::new(502, line, format!("click: {}", e)))?;
     println!("clicked: {}", sel);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn type_text(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn type_text(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let id = args.first().map(|v| v.as_str()).unwrap_or_default();
     let text = args.get(1).map(|v| v.as_str()).unwrap_or_default();
     if id.is_empty() { return Err(RuntimeError::new(400, line, "type_text(id, text) needs id")); }
@@ -201,10 +201,10 @@ pub fn type_text(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeEr
     s.send_keys(&eid, &text).map_err(|e| RuntimeError::new(502, line, format!("send_keys: {}", e)))?;
     println!("typed into #{}", id);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn fill_form(kwargs: &BTreeMap<String, Vec<Value>>, line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn fill_form(kwargs: &BTreeMap<String, Vec<Value>>, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let id = one_kw(kwargs, "id").ok_or_else(|| RuntimeError::new(400, line, "fill_form requires id(...)"))?;
     let value = one_kw(kwargs, "value").ok_or_else(|| RuntimeError::new(400, line, "fill_form requires value(...)"))?;
     let s = session(ctx, line)?;
@@ -215,10 +215,10 @@ pub fn fill_form(kwargs: &BTreeMap<String, Vec<Value>>, line: usize, ctx: &Ctx) 
     s.send_keys(&eid, &value).map_err(|e| RuntimeError::new(502, line, format!("send_keys: {}", e)))?;
     println!("filled #{} = {:?}", id, value);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn login(kwargs: &BTreeMap<String, Vec<Value>>, line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn login(kwargs: &BTreeMap<String, Vec<Value>>, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let user = one_kw(kwargs, "user").ok_or_else(|| RuntimeError::new(400, line, "login requires user(...)"))?;
     let pwd = one_kw(kwargs, "pws").or_else(|| one_kw(kwargs, "password"))
         .ok_or_else(|| RuntimeError::new(400, line, "login requires pws(...)"))?;
@@ -239,19 +239,19 @@ pub fn login(kwargs: &BTreeMap<String, Vec<Value>>, line: usize, ctx: &Ctx) -> R
     s.send_keys(&pwd_eid, "\u{E007}").map_err(|e| RuntimeError::new(502, line, format!("login (submit): {}", e)))?;
     println!("(login) user={:?} password=***", user);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn execute_js(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn execute_js(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let code = first_str(args, line, "execute_js")?;
     let s = session(ctx, line)?;
     let v = s.execute_script(&code).map_err(|e| RuntimeError::new(502, line, format!("execute_js: {}", e)))?;
     println!("(js) -> {}", v);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn download_file(args: &[Value], line: usize) -> Result<(), RuntimeError> {
+pub fn download_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let url = args.first().map(|v| v.as_str()).unwrap_or_default();
     let path = args.get(1).map(|v| v.as_str()).unwrap_or_default();
     if url.is_empty() || path.is_empty() {
@@ -261,12 +261,12 @@ pub fn download_file(args: &[Value], line: usize) -> Result<(), RuntimeError> {
     println!("$ {}", cmd);
     let r = Command::new("sh").arg("-c").arg(&cmd).status();
     match r {
-        Ok(s) if s.success() => { println!("completed"); Ok(()) }
-        _ => { eprintln!("error 502 string {}  // download failed", line); Ok(()) }
+        Ok(s) if s.success() => { println!("completed"); Ok(Value::Nil) }
+        _ => { eprintln!("error 502 string {}  // download failed", line); Ok(Value::Nil) }
     }
 }
 
-pub fn upload_file(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), RuntimeError> {
+pub fn upload_file(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let path = args.first().map(|v| v.as_str()).unwrap_or_default();
     let id = args.get(1).map(|v| v.as_str()).unwrap_or_default();
     if path.is_empty() || id.is_empty() {
@@ -279,7 +279,7 @@ pub fn upload_file(args: &[Value], line: usize, ctx: &Ctx) -> Result<(), Runtime
     s.send_keys(&eid, &path).map_err(|e| RuntimeError::new(502, line, format!("upload: {}", e)))?;
     println!("uploaded {} -> #{}", path, id);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
 // ---------- Helpers ----------
@@ -335,7 +335,7 @@ fn key_to_unicode(name: &str) -> Option<&'static str> {
 }
 
 /// OS-default URL opener, used only when no WebDriver is installed.
-fn os_open(url: &str, line: usize) -> Result<(), RuntimeError> {
+fn os_open(url: &str, line: usize) -> Result<Value, RuntimeError> {
     let result = if cfg!(target_os = "macos") {
         Command::new("open").arg(url).status()
     } else if cfg!(target_os = "windows") {
@@ -344,7 +344,7 @@ fn os_open(url: &str, line: usize) -> Result<(), RuntimeError> {
         Command::new("xdg-open").arg(url).status()
     };
     match result {
-        Ok(s) if s.success() => { println!("opened: {}", url); println!("completed"); Ok(()) }
+        Ok(s) if s.success() => { println!("opened: {}", url); println!("completed"); Ok(Value::Nil) }
         Ok(_) => Err(RuntimeError::new(500, line, "browser launch returned non-zero")),
         Err(e) => Err(RuntimeError::new(500, line, format!("browser launch: {}", e))),
     }

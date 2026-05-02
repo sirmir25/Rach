@@ -1,17 +1,83 @@
-/// Built-in mini "AI" code generator.
+/// AI code generator with two backends:
 ///
-/// This is a heuristic / template-based generator — it does NOT call out to a real
-/// language model. It recognizes a small set of canonical tasks (install oh-my-zsh,
-/// TCP server, file copy, JSON parser, etc.) and emits idiomatic boilerplate in the
-/// requested language. For unknown tasks it emits a clearly-marked TODO stub so the
-/// script remains valid and obvious.
+/// 1. **Live LLM** (preferred): if `ANTHROPIC_API_KEY` is set, call the Claude
+///    Messages API via `curl` and serde_json. No new Rust deps. The model is
+///    `claude-haiku-4-5-20251001` by default (fast, cheap); override with
+///    `RACH_LLM_MODEL`. Limited to 1024 output tokens.
+/// 2. **Templates** (fallback): heuristic snippets for a few canonical tasks.
+///    Always available, even offline.
 pub fn ai_generate(language: &str, task: &str, line: usize) {
     let lang = language.to_ascii_lowercase();
-    let body = generate(&lang, task);
     println!("# ---- ai_generate({}, {:?}) [line {}] ----", lang, task, line);
+
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        if !key.is_empty() {
+            match call_claude(&key, &lang, task) {
+                Ok(text) => {
+                    println!("{}", text);
+                    println!("# ---- end ai_generate (claude) ----");
+                    println!("completed");
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("// claude call failed: {} — falling back to templates", e);
+                }
+            }
+        }
+    }
+
+    let body = generate(&lang, task);
     println!("{}", body);
-    println!("# ---- end ai_generate ----");
+    println!("# ---- end ai_generate (templates) ----");
     println!("completed");
+}
+
+fn call_claude(api_key: &str, lang: &str, task: &str) -> Result<String, String> {
+    use std::process::Command;
+
+    let model = std::env::var("RACH_LLM_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string());
+    let prompt = format!(
+        "Generate idiomatic, runnable {} code for this task:\n\n{}\n\nRespond with code only — no markdown fences, no commentary. Keep it minimal but complete.",
+        lang, task
+    );
+
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 1024,
+        "messages": [{ "role": "user", "content": prompt }],
+    });
+    let body_str = body.to_string();
+
+    let output = Command::new("curl")
+        .arg("-sS")
+        .arg("-X").arg("POST")
+        .arg("https://api.anthropic.com/v1/messages")
+        .arg("-H").arg(format!("x-api-key: {}", api_key))
+        .arg("-H").arg("anthropic-version: 2023-06-01")
+        .arg("-H").arg("content-type: application/json")
+        .arg("--max-time").arg("60")
+        .arg("-d").arg(&body_str)
+        .output()
+        .map_err(|e| format!("spawn curl: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!("curl exit {:?}: {}", output.status.code(), String::from_utf8_lossy(&output.stderr)));
+    }
+
+    let resp_text = String::from_utf8_lossy(&output.stdout);
+    let resp: serde_json::Value = serde_json::from_str(&resp_text)
+        .map_err(|e| format!("parse json: {} — body was: {}", e, resp_text))?;
+
+    if let Some(err) = resp.get("error") {
+        return Err(format!("api error: {}", err));
+    }
+
+    let text = resp.get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.iter().find_map(|b| b.get("text").and_then(|t| t.as_str())))
+        .ok_or_else(|| format!("unexpected response shape: {}", resp_text))?;
+
+    Ok(text.to_string())
 }
 
 fn generate(lang: &str, task: &str) -> String {

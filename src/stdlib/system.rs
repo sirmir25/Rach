@@ -17,7 +17,7 @@ fn nth_str(args: &[Value], n: usize, line: usize, what: &str) -> Result<String, 
         .ok_or_else(|| RuntimeError::new(400, line, format!("{} requires arg #{}", what, n + 1)))
 }
 
-pub fn run_command(args: &[Value], line: usize) -> Result<(), RuntimeError> {
+pub fn run_command(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let cmd = first_str(args, line, "run_command")?;
     println!("$ {}", cmd);
     let (program, shell_arg) = if cfg!(target_os = "windows") {
@@ -28,26 +28,27 @@ pub fn run_command(args: &[Value], line: usize) -> Result<(), RuntimeError> {
     let output = Command::new(program).arg(shell_arg).arg(&cmd).output();
     match output {
         Ok(o) => {
+            let stdout_str = String::from_utf8_lossy(&o.stdout).to_string();
             if !o.stdout.is_empty() {
-                print!("{}", String::from_utf8_lossy(&o.stdout));
+                print!("{}", stdout_str);
             }
             if !o.stderr.is_empty() {
                 eprint!("{}", String::from_utf8_lossy(&o.stderr));
             }
             if o.status.success() {
                 println!("completed");
-                Ok(())
+                Ok(Value::Str(stdout_str))
             } else {
                 let code = o.status.code().unwrap_or(1) as i64;
                 eprintln!("error {} string {}", 400 + code, line);
-                Ok(())
+                Ok(Value::Nil)
             }
         }
         Err(e) => Err(RuntimeError::new(500, line, format!("run_command failed: {}", e))),
     }
 }
 
-pub fn install_package(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<(), RuntimeError> {
+pub fn install_package(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
     let pkg = first_str(args, line, "install_package")?;
     let (program, install_args): (&str, Vec<String>) = match ctx.current_os.as_str() {
         "macos" => ("brew", vec!["install".into(), pkg.clone()]),
@@ -64,12 +65,12 @@ pub fn install_package(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<(),
                 Some("pacman") => ("sudo", vec!["pacman".into(), "-S".into(), "--noconfirm".into(), pkg.clone()]),
                 Some("zypper") => ("sudo", vec!["zypper".into(), "install".into(), "-y".into(), pkg.clone()]),
                 Some("apk") => ("sudo", vec!["apk".into(), "add".into(), pkg.clone()]),
-                _ => { eprintln!("error 404 string {}  // no package manager found", line); return Ok(()); }
+                _ => { eprintln!("error 404 string {}  // no package manager found", line); return Ok(Value::Nil); }
             }
         }
         "windows" => ("winget", vec!["install".into(), "--silent".into(), pkg.clone()]),
         "bsd" => ("pkg", vec!["install".into(), "-y".into(), pkg.clone()]),
-        _ => { eprintln!("error 501 string {}  // unsupported OS for install_package", line); return Ok(()); }
+        _ => { eprintln!("error 501 string {}  // unsupported OS for install_package", line); return Ok(Value::Nil); }
     };
 
     println!("$ {} {}", program, install_args.join(" "));
@@ -78,83 +79,92 @@ pub fn install_package(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<(),
     if dry_run {
         println!("// RACH_DRY_RUN=1 — skipped execution");
         println!("completed");
-        return Ok(());
+        return Ok(Value::Bool(true));
     }
 
-    let mut cmd = std::process::Command::new(program);
+    let mut cmd = Command::new(program);
     cmd.args(&install_args);
     let result = cmd.status();
     match result {
-        Ok(s) if s.success() => { println!("completed"); Ok(()) }
+        Ok(s) if s.success() => { println!("completed"); Ok(Value::Bool(true)) }
         Ok(s) => {
             let code = s.code().unwrap_or(1) as i64;
             eprintln!("error {} string {}  // install_package exited with {}", 400 + code, line, code);
-            Ok(())
+            Ok(Value::Bool(false))
         }
         Err(e) => {
             eprintln!("error 500 string {}  // install_package: {}", line, e);
-            Ok(())
+            Ok(Value::Bool(false))
         }
     }
 }
 
-pub fn create_file(args: &[Value], line: usize) -> Result<(), RuntimeError> {
+pub fn create_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let path = nth_str(args, 0, line, "create_file")?;
     let content = nth_str(args, 1, line, "create_file").unwrap_or_default();
     match fs::write(&path, content.as_bytes()) {
-        Ok(_) => { println!("created: {}", path); println!("completed"); Ok(()) }
-        Err(e) => { eprintln!("error 500 string {}  // create_file: {}", line, e); Ok(()) }
+        Ok(_) => { println!("created: {}", path); println!("completed"); Ok(Value::Str(path)) }
+        Err(e) => { eprintln!("error 500 string {}  // create_file: {}", line, e); Ok(Value::Nil) }
     }
 }
 
-pub fn read_file(args: &[Value], line: usize) -> Result<(), RuntimeError> {
+pub fn read_file(args: &[Value], line: usize, capturing: bool) -> Result<Value, RuntimeError> {
     let path = first_str(args, line, "read_file")?;
     match fs::read_to_string(&path) {
-        Ok(s) => { print!("{}", s); if !s.ends_with('\n') { println!(); } println!("completed"); Ok(()) }
-        Err(e) => { eprintln!("error 404 string {}  // read_file: {}", line, e); Ok(()) }
+        Ok(s) => {
+            if !capturing {
+                print!("{}", s);
+                if !s.ends_with('\n') { println!(); }
+                println!("completed");
+            }
+            Ok(Value::Str(s))
+        }
+        Err(e) => { eprintln!("error 404 string {}  // read_file: {}", line, e); Ok(Value::Nil) }
     }
 }
 
-pub fn edit_file(args: &[Value], line: usize) -> Result<(), RuntimeError> {
+pub fn edit_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let path = nth_str(args, 0, line, "edit_file")?;
     let content = nth_str(args, 1, line, "edit_file")?;
     match fs::write(&path, content.as_bytes()) {
-        Ok(_) => { println!("edited: {}", path); println!("completed"); Ok(()) }
-        Err(e) => { eprintln!("error 500 string {}  // edit_file: {}", line, e); Ok(()) }
+        Ok(_) => { println!("edited: {}", path); println!("completed"); Ok(Value::Str(path)) }
+        Err(e) => { eprintln!("error 500 string {}  // edit_file: {}", line, e); Ok(Value::Nil) }
     }
 }
 
-pub fn delete_file(args: &[Value], line: usize) -> Result<(), RuntimeError> {
+pub fn delete_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let path = first_str(args, line, "delete_file")?;
     match fs::remove_file(&path) {
-        Ok(_) => { println!("deleted: {}", path); println!("completed"); Ok(()) }
-        Err(e) => { eprintln!("error 404 string {}  // delete_file: {}", line, e); Ok(()) }
+        Ok(_) => { println!("deleted: {}", path); println!("completed"); Ok(Value::Bool(true)) }
+        Err(e) => { eprintln!("error 404 string {}  // delete_file: {}", line, e); Ok(Value::Bool(false)) }
     }
 }
 
-pub fn check_if_exists(args: &[Value], line: usize) -> Result<(), RuntimeError> {
+pub fn check_if_exists(args: &[Value], line: usize, capturing: bool) -> Result<Value, RuntimeError> {
     let path = first_str(args, line, "check_if_exists")?;
     let exists = Path::new(&path).exists();
-    println!("{}: {}", path, if exists { "exists" } else { "missing" });
-    println!("completed");
-    Ok(())
+    if !capturing {
+        println!("{}: {}", path, if exists { "exists" } else { "missing" });
+        println!("completed");
+    }
+    let _ = line;
+    Ok(Value::Bool(exists))
 }
 
-pub fn reboot(line: usize) -> Result<(), RuntimeError> {
+pub fn reboot(line: usize) -> Result<Value, RuntimeError> {
     eprintln!("warn: reboot() is a destructive action; interpreter only prints intent");
     println!("would reboot system [line {}]", line);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-pub fn shutdown(line: usize) -> Result<(), RuntimeError> {
+pub fn shutdown(line: usize) -> Result<Value, RuntimeError> {
     eprintln!("warn: shutdown() is a destructive action; interpreter only prints intent");
     println!("would shut down system [line {}]", line);
     println!("completed");
-    Ok(())
+    Ok(Value::Nil)
 }
 
-/// Tiny inline `which` helper — avoids pulling a crate dependency.
 mod which {
     use std::path::PathBuf;
 

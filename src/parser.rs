@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::ast::{BashAction, CallSegment, Function, Program, Stmt, Value};
+use crate::ast::{BashAction, CallSegment, Expr, Function, Program, Stmt, Value};
 use crate::lexer::{Tok, Token};
 
 #[derive(Debug)]
@@ -23,23 +23,18 @@ struct P {
 
 impl P {
     fn new(tokens: Vec<Token>) -> Self { Self { tokens, pos: 0 } }
-
     fn peek(&self) -> Option<&Token> { self.tokens.get(self.pos) }
-
     fn peek_at(&self, off: usize) -> Option<&Token> { self.tokens.get(self.pos + off) }
-
     fn next(&mut self) -> Option<Token> {
         let t = self.tokens.get(self.pos).cloned();
         if t.is_some() { self.pos += 1; }
         t
     }
-
     fn skip_newlines(&mut self) {
         while matches!(self.peek().map(|t| &t.tok), Some(Tok::Newline)) {
             self.pos += 1;
         }
     }
-
     fn expect_newline(&mut self) -> Result<(), ParseError> {
         match self.peek().map(|t| &t.tok) {
             Some(Tok::Newline) => { self.pos += 1; Ok(()) }
@@ -47,7 +42,6 @@ impl P {
             _ => Err(ParseError::at(self.peek(), "expected end of line")),
         }
     }
-
     fn expect_word(&mut self, w: &str) -> Result<Token, ParseError> {
         match self.peek().cloned() {
             Some(t) => match &t.tok {
@@ -57,7 +51,6 @@ impl P {
             None => Err(ParseError::at(None, format!("expected `{}`", w))),
         }
     }
-
     fn expect_tok(&mut self, expected: &Tok, label: &str) -> Result<Token, ParseError> {
         match self.peek().cloned() {
             Some(t) if std::mem::discriminant(&t.tok) == std::mem::discriminant(expected) => {
@@ -75,7 +68,6 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
 
     p.skip_newlines();
 
-    // Imports
     while let Some(tok) = p.peek().cloned() {
         if let Tok::Word(w) = &tok.tok {
             if w == "import" {
@@ -94,7 +86,6 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
         break;
     }
 
-    // Functions
     while let Some(tok) = p.peek().cloned() {
         match &tok.tok {
             Tok::Word(w) if w == "rach" => {
@@ -109,8 +100,6 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
     Ok(Program { imports, functions })
 }
 
-/// Accept either `end` or `endN` (where N is one or more digits glued to the keyword
-/// because the lexer permits digits in identifier continuations).
 fn expect_end_marker(p: &mut P) -> Result<(), ParseError> {
     let tok = p.next().ok_or_else(|| ParseError::at(None, "expected `end`"))?;
     match &tok.tok {
@@ -127,18 +116,41 @@ fn parse_function(p: &mut P) -> Result<Function, ParseError> {
         _ => return Err(ParseError::at(Some(&name_tok), "expected function name")),
     };
     p.expect_tok(&Tok::LParen, "`(`")?;
-    let arity_tok = p.next().ok_or_else(|| ParseError::at(None, "expected arity"))?;
-    let arity = match arity_tok.tok {
-        Tok::Int(n) => n as u32,
-        _ => return Err(ParseError::at(Some(&arity_tok), "expected integer arity")),
-    };
-    p.expect_tok(&Tok::RParen, "`)`")?;
+
+    // Two forms inside the parens:
+    //   `rach main(0)`            — legacy arity (an integer); produces no named params
+    //   `rach myfn(a, b)`         — named params (zero or more identifiers)
+    //   `rach myfn()`             — empty
+    let mut params: Vec<String> = Vec::new();
+    match p.peek().map(|t| t.tok.clone()) {
+        Some(Tok::RParen) => { p.next(); }
+        Some(Tok::Int(_)) => {
+            p.next(); // discard legacy arity
+            p.expect_tok(&Tok::RParen, "`)`")?;
+        }
+        Some(Tok::Word(_)) => {
+            loop {
+                let pt = p.next().ok_or_else(|| ParseError::at(None, "expected param name"))?;
+                match pt.tok {
+                    Tok::Word(s) => params.push(s),
+                    _ => return Err(ParseError::at(Some(&pt), "expected param name")),
+                }
+                match p.peek().map(|t| t.tok.clone()) {
+                    Some(Tok::Comma) => { p.next(); }
+                    Some(Tok::RParen) => { p.next(); break; }
+                    _ => return Err(ParseError::at(p.peek(), "expected `,` or `)` in param list")),
+                }
+            }
+        }
+        _ => return Err(ParseError::at(p.peek(), "expected params or arity")),
+    }
+
     p.expect_newline()?;
     p.skip_newlines();
 
-    let body = parse_block(p, 0)?; // 0 = no minimum indent (only stops on `return`)
+    let body = parse_block(p, 0)?;
 
-    // return(end)  — `end` may also tokenize as `endN` (digits run together with the word)
+    // `return(end)` — function-end marker (NOT the same as `return <expr>`)
     p.expect_word("return")?;
     p.expect_tok(&Tok::LParen, "`(`")?;
     expect_end_marker(p)?;
@@ -146,7 +158,6 @@ fn parse_function(p: &mut P) -> Result<Function, ParseError> {
     p.expect_newline()?;
     p.skip_newlines();
 
-    // (endN)
     p.expect_tok(&Tok::LParen, "`(`")?;
     expect_end_marker(p)?;
     if let Some(Tok::Int(_)) = p.peek().map(|t| t.tok.clone()) {
@@ -155,12 +166,9 @@ fn parse_function(p: &mut P) -> Result<Function, ParseError> {
     p.expect_tok(&Tok::RParen, "`)`")?;
     p.expect_newline()?;
 
-    Ok(Function { name, arity, body, line: header.line })
+    Ok(Function { name, params, body, line: header.line })
 }
 
-/// Parse a sequence of statements. `min_indent_col` is the minimum starting column;
-/// we stop when the next stmt starts at col <= min_indent_col, or on `return`/`(`
-/// at the function level, or end-of-file.
 fn parse_block(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError> {
     let mut stmts = Vec::new();
     loop {
@@ -170,13 +178,29 @@ fn parse_block(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError
             None => break,
         };
 
-        // End of function-level block
-        if matches!(&tok.tok, Tok::Word(w) if w == "return") { break; }
-        if matches!(&tok.tok, Tok::LParen) { break; } // `(end0)` sentinel
+        // Function-end marker `return(end)` — only at function level (min_indent=0)
+        if min_indent_col == 0 {
+            if matches!(&tok.tok, Tok::Word(w) if w == "return") {
+                if let Some(Tok::LParen) = p.peek_at(1).map(|t| t.tok.clone()) {
+                    if let Some(Tok::Word(end_w)) = p.peek_at(2).map(|t| t.tok.clone()) {
+                        if end_w == "end" || (end_w.starts_with("end") && end_w[3..].chars().all(|c| c.is_ascii_digit())) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if matches!(&tok.tok, Tok::LParen) { break; }
 
-        // Indent check (only matters for nested blocks; min_indent_col=0 disables)
         if min_indent_col > 0 && tok.col <= min_indent_col {
             break;
+        }
+
+        // `else:` ends the current block (it's consumed by the `if` parser)
+        if matches!(&tok.tok, Tok::Word(w) if w == "else") {
+            if let Some(Tok::Colon) = p.peek_at(1).map(|t| t.tok.clone()) {
+                break;
+            }
         }
 
         let stmt = parse_stmt(p)?;
@@ -195,14 +219,12 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         _ => return Err(ParseError::at(Some(&head), format!("unexpected token {:?}", head.tok))),
     };
 
-    // `completed`
     if word == "completed" {
         p.next();
         p.expect_newline()?;
         return Ok(Stmt::Completed { line: head_line });
     }
 
-    // `error N string M`
     if word == "error" {
         p.next();
         let code_tok = p.next().ok_or_else(|| ParseError::at(Some(&head), "expected error code"))?;
@@ -210,7 +232,6 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
             Tok::Int(n) => n,
             _ => return Err(ParseError::at(Some(&code_tok), "expected error code (int)")),
         };
-        // optional `string N`
         let mut line_ref = 0i64;
         if let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
             if w == "string" {
@@ -223,9 +244,37 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         return Ok(Stmt::Error { code, line_ref, line: head_line });
     }
 
-    // `if WORD :`
+    if word == "return" {
+        p.next();
+        // `return` followed by newline → bare return
+        if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Newline) | None) {
+            p.expect_newline()?;
+            return Ok(Stmt::Return { expr: None, line: head_line });
+        }
+        let expr = parse_expr(p)?;
+        p.expect_newline()?;
+        return Ok(Stmt::Return { expr: Some(expr), line: head_line });
+    }
+
+    if word == "set" {
+        p.next();
+        let name_tok = p.next().ok_or_else(|| ParseError::at(None, "expected variable name"))?;
+        let name = match name_tok.tok {
+            Tok::Word(s) => s,
+            _ => return Err(ParseError::at(Some(&name_tok), "expected variable name")),
+        };
+        p.expect_tok(&Tok::Equals, "`=`")?;
+        let expr = parse_expr(p)?;
+        p.expect_newline()?;
+        return Ok(Stmt::Set { name, expr, line: head_line });
+    }
+
     if word == "if" {
         p.next();
+        let mut negate = false;
+        if let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
+            if w == "not" { p.next(); negate = true; }
+        }
         let os_tok = p.next().ok_or_else(|| ParseError::at(Some(&head), "expected os name"))?;
         let os = match os_tok.tok {
             Tok::Word(s) => s,
@@ -234,22 +283,65 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         p.expect_tok(&Tok::Colon, "`:`")?;
         p.expect_newline()?;
         let body = parse_block(p, head_col)?;
-        return Ok(Stmt::IfOs { os, body, line: head_line });
+
+        // Optional `else:` at the SAME column as the `if`
+        let mut else_body: Option<Vec<Stmt>> = None;
+        p.skip_newlines();
+        if let Some(t) = p.peek().cloned() {
+            if matches!(&t.tok, Tok::Word(w) if w == "else") && t.col == head_col {
+                p.next();
+                p.expect_tok(&Tok::Colon, "`:`")?;
+                p.expect_newline()?;
+                let eb = parse_block(p, head_col)?;
+                else_body = Some(eb);
+            }
+        }
+        return Ok(Stmt::IfOs { os, negate, body, else_body, line: head_line });
     }
 
-    // `bash = ...` or any `WORD = ...` bash DSL line
-    // Detect by checking if next token is `=` (Equals)
-    if let Some(Tok::Equals) = p.peek_at(1).map(|t| t.tok.clone()) {
-        // word can be anything; we treat it as a bash-DSL assignment
-        p.next(); // word
-        p.next(); // =
-        // Consume the rest of the line as raw words/strings
-        let (action, argument) = parse_bash_dsl_rhs(p)?;
+    if word == "for" {
+        p.next();
+        let var_tok = p.next().ok_or_else(|| ParseError::at(None, "expected loop variable"))?;
+        let var = match var_tok.tok {
+            Tok::Word(s) => s,
+            _ => return Err(ParseError::at(Some(&var_tok), "expected loop variable")),
+        };
+        p.expect_word("in")?;
+        let iter = parse_expr(p)?;
+        p.expect_tok(&Tok::Colon, "`:`")?;
         p.expect_newline()?;
-        return Ok(Stmt::BashDsl { action, argument, line: head_line });
+        let body = parse_block(p, head_col)?;
+        return Ok(Stmt::For { var, iter, body, line: head_line });
     }
 
-    // ai_generate(...)
+    // `WORD = ...` — variable assignment shorthand for `set` OR bash DSL.
+    // To stay backward-compatible with `bash = generate ...` we treat any
+    // `WORD = WORD ...` (RHS starting with a bare word that isn't a string,
+    // int, or call) as a bash DSL line. Strings and calls go through `set`.
+    if let Some(Tok::Equals) = p.peek_at(1).map(|t| t.tok.clone()) {
+        // Look at what's on the RHS.
+        let rhs_first = p.peek_at(2).map(|t| t.tok.clone());
+        let is_set_form = matches!(&rhs_first,
+            Some(Tok::Str(_)) | Some(Tok::Int(_)) | Some(Tok::LBracket)
+        ) || matches!(&rhs_first,
+            Some(Tok::Word(w)) if matches!(p.peek_at(3).map(|t| t.tok.clone()), Some(Tok::LParen))
+        );
+
+        if is_set_form {
+            p.next(); // word
+            p.next(); // =
+            let expr = parse_expr(p)?;
+            p.expect_newline()?;
+            return Ok(Stmt::Set { name: word, expr, line: head_line });
+        } else {
+            p.next(); // word
+            p.next(); // =
+            let (action, argument) = parse_bash_dsl_rhs(p)?;
+            p.expect_newline()?;
+            return Ok(Stmt::BashDsl { action, argument, line: head_line });
+        }
+    }
+
     if word == "ai_generate" {
         p.next();
         p.expect_tok(&Tok::LParen, "`(`")?;
@@ -279,12 +371,10 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         return Ok(Stmt::AiGenerate { language, task, line: head_line });
     }
 
-    // Otherwise: a "command call" — sequence of words then `(`...`)`, optionally repeated.
-    parse_call_stmt(p, head_line)
+    parse_call_or_fncall_stmt(p, head_line)
 }
 
 fn parse_bash_dsl_rhs(p: &mut P) -> Result<(BashAction, String), ParseError> {
-    // Consume words/strings until newline
     let mut tokens: Vec<String> = Vec::new();
     loop {
         match p.peek().map(|t| t.tok.clone()) {
@@ -304,7 +394,6 @@ fn parse_bash_dsl_rhs(p: &mut P) -> Result<(BashAction, String), ParseError> {
         "generate" => BashAction::Generate,
         "search" => BashAction::Search,
         "web" => {
-            // expect `web search ...`
             if tokens.len() >= 2 && tokens[1] == "search" {
                 let rest2 = tokens[2..].join(" ");
                 return Ok((BashAction::WebSearch, rest2));
@@ -312,14 +401,50 @@ fn parse_bash_dsl_rhs(p: &mut P) -> Result<(BashAction, String), ParseError> {
             BashAction::Search
         }
         "complete" => BashAction::CompleteOrError,
-        _ => BashAction::Generate, // forgiving default
+        _ => BashAction::Generate,
     };
     Ok((action, rest))
 }
 
-fn parse_call_stmt(p: &mut P, line: usize) -> Result<Stmt, ParseError> {
-    let mut segments: Vec<CallSegment> = Vec::new();
+fn parse_call_or_fncall_stmt(p: &mut P, line: usize) -> Result<Stmt, ParseError> {
+    // Detect bare `name(args)` user-fn call vs. multi-segment command call.
+    // Heuristic: a single Word followed immediately by `(` AND nothing more
+    // after the matching `)` than newline, AND the name is NOT in the known
+    // command registry — treat as user-fn ExprStmt. Otherwise, command-style.
+    if let (Some(Tok::Word(w)), Some(Tok::LParen)) = (
+        p.peek().map(|t| t.tok.clone()),
+        p.peek_at(1).map(|t| t.tok.clone()),
+    ) {
+        // Don't consume yet — first try command-style. Command-style with
+        // multi-word names will work fine; this branch is for single-word fn
+        // calls only, and we let the dispatcher decide unknown ones.
+        if !crate::stdlib::is_known_command(&w) {
+            // Parse as user-fn call
+            let _ = p.next();
+            p.expect_tok(&Tok::LParen, "`(`")?;
+            let mut args = Vec::new();
+            loop {
+                match p.peek().map(|t| t.tok.clone()) {
+                    Some(Tok::RParen) => { p.next(); break; }
+                    Some(Tok::Comma) => { p.next(); continue; }
+                    _ => {
+                        let e = parse_expr(p)?;
+                        args.push(e);
+                    }
+                }
+            }
+            p.expect_newline()?;
+            return Ok(Stmt::ExprStmt { expr: Expr::FnCall { name: w, args, line }, line });
+        }
+    }
 
+    let segments = parse_call_segments(p)?;
+    p.expect_newline()?;
+    Ok(Stmt::Call { segments, line })
+}
+
+fn parse_call_segments(p: &mut P) -> Result<Vec<CallSegment>, ParseError> {
+    let mut segments: Vec<CallSegment> = Vec::new();
     loop {
         let words = collect_word_run(p)?;
         if words.is_empty() { break; }
@@ -329,19 +454,15 @@ fn parse_call_stmt(p: &mut P, line: usize) -> Result<Stmt, ParseError> {
         let (positional, named) = parse_arglist(p)?;
         segments.push(CallSegment { words, positional, named });
     }
-
     if segments.is_empty() {
         return Err(ParseError::at(p.peek(), "expected command name"));
     }
-
-    p.expect_newline()?;
-    Ok(Stmt::Call { segments, line })
+    Ok(segments)
 }
 
 fn collect_word_run(p: &mut P) -> Result<Vec<String>, ParseError> {
     let mut out = Vec::new();
     while let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
-        // stop if next-next is `=` (means key=value, not a word run)
         if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Equals)) {
             break;
         }
@@ -351,38 +472,103 @@ fn collect_word_run(p: &mut P) -> Result<Vec<String>, ParseError> {
     Ok(out)
 }
 
-fn parse_arglist(p: &mut P) -> Result<(Vec<Value>, BTreeMap<String, Value>), ParseError> {
+fn parse_arglist(p: &mut P) -> Result<(Vec<Expr>, BTreeMap<String, Expr>), ParseError> {
     p.expect_tok(&Tok::LParen, "`(`")?;
-    let mut positional = Vec::new();
-    let mut named: BTreeMap<String, Value> = BTreeMap::new();
+    let mut positional: Vec<Expr> = Vec::new();
+    let mut named: BTreeMap<String, Expr> = BTreeMap::new();
 
     loop {
         match p.peek().map(|t| t.tok.clone()) {
             Some(Tok::RParen) => { p.next(); break; }
             Some(Tok::Comma) => { p.next(); continue; }
-            Some(Tok::Str(s)) => { p.next(); positional.push(Value::Str(s)); }
-            Some(Tok::Int(n)) => { p.next(); positional.push(Value::Int(n)); }
-            Some(Tok::Word(w)) => {
-                // Could be `key = value` or a bare word value.
-                if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Equals)) {
-                    p.next(); // word
-                    p.next(); // =
-                    let v_tok = p.next().ok_or_else(|| ParseError::at(None, "expected value"))?;
-                    let v = match v_tok.tok {
-                        Tok::Str(s) => Value::Str(s),
-                        Tok::Int(n) => Value::Int(n),
-                        Tok::Word(s) => Value::Str(s),
-                        _ => return Err(ParseError::at(Some(&v_tok), "bad value")),
-                    };
-                    named.insert(w, v);
-                } else {
-                    p.next();
-                    positional.push(Value::Str(w));
-                }
+            Some(Tok::Word(w)) if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Equals)) => {
+                p.next(); // word
+                p.next(); // =
+                let v = parse_expr(p)?;
+                named.insert(w, v);
             }
-            other => return Err(ParseError::at(other.as_ref().and_then(|_| p.peek()), "unexpected token in argument list")),
+            _ => {
+                let v = parse_expr(p)?;
+                positional.push(v);
+            }
         }
     }
-
     Ok((positional, named))
+}
+
+/// Parse a single expression. Order of precedence handled here:
+/// list literal `[...]`, fn-call `name(...)`, command call `read_file("x")`,
+/// variable, literal.
+pub fn parse_expr(p: &mut P) -> Result<Expr, ParseError> {
+    let head = p.peek().cloned().ok_or_else(|| ParseError::at(None, "expected expression"))?;
+    match head.tok.clone() {
+        Tok::Str(s) => { p.next(); Ok(Expr::Lit(Value::Str(s))) }
+        Tok::Int(n) => { p.next(); Ok(Expr::Lit(Value::Int(n))) }
+        Tok::LBracket => {
+            p.next();
+            let mut items = Vec::new();
+            loop {
+                match p.peek().map(|t| t.tok.clone()) {
+                    Some(Tok::RBracket) => { p.next(); break; }
+                    Some(Tok::Comma) => { p.next(); continue; }
+                    _ => {
+                        let e = parse_expr(p)?;
+                        items.push(e);
+                    }
+                }
+            }
+            Ok(Expr::List(items))
+        }
+        Tok::Word(w) => {
+            // Identifier — may be: bool literal, variable, fn call, or command call.
+            // - `true` / `false` → bool literal
+            // - `name(...)` → user-fn call OR command call (dispatcher decides)
+            // - `name` alone → variable reference
+            // - multi-word + `(` → command call
+            if w == "true" { p.next(); return Ok(Expr::Lit(Value::Bool(true))); }
+            if w == "false" { p.next(); return Ok(Expr::Lit(Value::Bool(false))); }
+            if w == "nil" { p.next(); return Ok(Expr::Lit(Value::Nil)); }
+
+            // Single word + `(` → call (we decide user-fn vs. command at that level)
+            if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::LParen)) {
+                if crate::stdlib::is_known_command(&w) {
+                    let line = head.line;
+                    let segments = parse_call_segments(p)?;
+                    return Ok(Expr::Call { segments, line });
+                } else {
+                    // user-fn call
+                    let _ = p.next();
+                    p.expect_tok(&Tok::LParen, "`(`")?;
+                    let mut args = Vec::new();
+                    loop {
+                        match p.peek().map(|t| t.tok.clone()) {
+                            Some(Tok::RParen) => { p.next(); break; }
+                            Some(Tok::Comma) => { p.next(); continue; }
+                            _ => {
+                                let e = parse_expr(p)?;
+                                args.push(e);
+                            }
+                        }
+                    }
+                    return Ok(Expr::FnCall { name: w, args, line: head.line });
+                }
+            }
+
+            // Multi-word command call (e.g. `read file("...")`): parse as call segments.
+            // Heuristic: peek the longest word-run; if any of those words combined
+            // is a known prefix of a multi-word command, parse as command call.
+            // Simplest: if next token after the leading word is also a Word, it's
+            // a multi-word command; parse via parse_call_segments.
+            if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Word(_))) {
+                let line = head.line;
+                let segments = parse_call_segments(p)?;
+                return Ok(Expr::Call { segments, line });
+            }
+
+            // Bare identifier → variable
+            p.next();
+            Ok(Expr::Var(w))
+        }
+        _ => Err(ParseError::at(Some(&head), format!("unexpected token in expression: {:?}", head.tok))),
+    }
 }

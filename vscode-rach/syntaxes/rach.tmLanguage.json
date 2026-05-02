@@ -1,0 +1,66 @@
+{
+  "scopeName": "source.rach",
+  "name": "Rach",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#functions" },
+    { "include": "#numbers" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.number-sign.rach", "match": "#.*$" },
+        { "name": "comment.line.double-slash.rach", "match": "//.*$" }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.rach",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.rach", "match": "\\\\." }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.rach",
+          "match": "\\b(import|rach|return|if|else|for|in|set|completed|error|string|not|ai_generate)\\b"
+        },
+        {
+          "name": "keyword.os.rach",
+          "match": "\\b(linux|macos|windows|darwin|bsd)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.rach", "match": "\\b(true|false|nil|end[0-9]*)\\b" }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.rach",
+          "match": "\\b(detect_os|reboot|shutdown|run_command|install_package|create_file|read_file|edit_file|delete_file|check_if_exists|open_in_browser|open_in_chrome|open_in_firefox|open_in_edge|open_in_safari|navigate_to|open_new_tab|switch_tab|wait_seconds|scroll_down_pixels|take_screenshot|press_key|click_button|click_element|type_text|fill_form|login|execute_js|download_file|upload_file|ascii_banner|ascii_box|ascii_pyramid|ascii_diamond|ascii_border|ascii_mirror|ascii_table)\\b"
+        },
+        {
+          "name": "support.function.builtin.spaced.rach",
+          "match": "\\b(detect|open|navigate|switch|wait|scroll|take|press|click|type|fill|execute|download|upload|ascii)\\s+([a-z_]+)"
+        }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.rach",
+      "match": "\\b-?[0-9]+\\b"
+    },
+    "identifiers": {
+      "name": "variable.other.rach",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  }
+}

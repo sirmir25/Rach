@@ -1,0 +1,48 @@
+import os
+import system
+import ascii
+
+rach greet(name)
+    set greeting = ascii_banner(name)
+    return greeting
+return(end)
+(end0)
+
+rach main(0)
+    detect os()
+
+    # Variables: capture command output
+    set os_name = detect_os()
+    create_file("/tmp/rach_new.txt", os_name)
+
+    # if/else
+    if linux:
+        run_command("uname -a")
+    else:
+        run_command("uname -s")
+
+    # if not <os>
+    if not windows:
+        run_command("echo 'not on windows'")
+
+    # for loop over a list literal
+    for url in ["alpha", "beta", "gamma"]:
+        create_file("/tmp/rach_loop.txt", url)
+
+    # for loop over a captured variable
+    set names = ["one", "two", "three"]
+    for n in names:
+        run_command("echo hello")
+
+    # ASCII art
+    ascii_banner("RACH")
+    ascii_box("hello world", title="info", style="rounded")
+    ascii_pyramid("X")
+
+    # User function call (returns value)
+    set b = greet("HI")
+    delete_file("/tmp/rach_new.txt")
+    delete_file("/tmp/rach_loop.txt")
+    completed
+return(end)
+(end0)

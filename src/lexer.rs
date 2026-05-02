@@ -5,6 +5,8 @@ pub enum Tok {
     Int(i64),
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     Comma,
     Equals,
     Colon,
@@ -64,6 +66,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
 
         if c == '(' { push(&mut tokens, Tok::LParen, line, tok_col); i += 1; col += 1; continue; }
         if c == ')' { push(&mut tokens, Tok::RParen, line, tok_col); i += 1; col += 1; continue; }
+        if c == '[' { push(&mut tokens, Tok::LBracket, line, tok_col); i += 1; col += 1; continue; }
+        if c == ']' { push(&mut tokens, Tok::RBracket, line, tok_col); i += 1; col += 1; continue; }
         if c == ',' { push(&mut tokens, Tok::Comma,  line, tok_col); i += 1; col += 1; continue; }
         if c == '=' { push(&mut tokens, Tok::Equals, line, tok_col); i += 1; col += 1; continue; }
         if c == ':' { push(&mut tokens, Tok::Colon,  line, tok_col); i += 1; col += 1; continue; }

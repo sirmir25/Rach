@@ -1,0 +1,22 @@
+{
+  "name": "rach",
+  "displayName": "Rach",
+  "description": "Syntax highlighting for the Rach scripting language",
+  "version": "0.1.0",
+  "publisher": "rach-lang",
+  "engines": { "vscode": "^1.70.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [{
+      "id": "rach",
+      "aliases": ["Rach", "rach"],
+      "extensions": [".rach"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "rach",
+      "scopeName": "source.rach",
+      "path": "./syntaxes/rach.tmLanguage.json"
+    }]
+  }
+}
