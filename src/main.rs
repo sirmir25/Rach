@@ -44,21 +44,23 @@ fn resolve_script_path(path: &str) -> Option<String> {
     candidates.into_iter().find(|p| Path::new(p).is_file())
 }
 
+use interpreter::report_pretty;
+
 fn run_file(path: &str, check_only: bool) -> ExitCode {
     let resolved = resolve_script_path(path);
-    let read_path: &str = match &resolved {
-        Some(p) => p.as_str(),
-        None => path,
+    let read_path: String = match &resolved {
+        Some(p) => p.clone(),
+        None => path.to_string(),
     };
     if let Some(p) = &resolved {
         if p != path {
             eprintln!("// using {} (not found at {})", p, path);
         }
     }
-    let source = match fs::read_to_string(read_path) {
+    let source = match fs::read_to_string(&read_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error 404 string 0  // cannot read {}: {}", path, e);
+            report_pretty("io", 404, path, 0, &format!("cannot read {}: {}", path, e), None);
             // Suggest examples/ if any .rach file there matches the basename
             if let Ok(entries) = fs::read_dir("examples") {
                 let stem = std::path::Path::new(path)
@@ -81,7 +83,7 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
     let tokens = match lexer::tokenize(&source) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("error 400 string {}  // lex: {}", e.line, e.message);
+            report_pretty("lex", 400, &read_path, e.line, &e.message, Some(&source));
             return ExitCode::from(3);
         }
     };
@@ -89,7 +91,7 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
     let program = match parser::parse(tokens) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("error 422 string {}  // parse: {}", e.line, e.message);
+            report_pretty("parse", 422, &read_path, e.line, &e.message, Some(&source));
             return ExitCode::from(4);
         }
     };
@@ -100,10 +102,10 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    match interpreter::run(&program) {
+    match interpreter::run(&program, &source, &read_path) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error {} string {}  // {}", e.code, e.line, e.message);
+            report_pretty("runtime", e.code, &read_path, e.line, &e.message, Some(&source));
             ExitCode::from(1)
         }
     }

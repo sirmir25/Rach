@@ -34,6 +34,10 @@ pub struct Ctx {
     /// True while evaluating the RHS of `set x = ...` — stdlib commands check
     /// this to skip side-effecting prints when their result is being captured.
     pub capturing: bool,
+    /// Source text of the running script, used by the pretty error printer.
+    pub source: String,
+    /// Path of the running script, shown in error headers.
+    pub script_path: String,
 }
 
 impl Ctx {
@@ -54,6 +58,49 @@ impl Ctx {
             scope.insert(name, value);
         }
     }
+
+    /// Print a runtime error in the same multi-line "rustc" format used for
+    /// lex / parse errors, with a caret pointing to the offending source line.
+    /// `code` echoes the HTTP-ish error code; `line` is 1-based (0 = no line).
+    pub fn report_error(&self, code: i64, line: usize, message: &str) {
+        report_pretty("runtime", code, &self.script_path, line, message, Some(&self.source));
+    }
+}
+
+pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, message: &str, source: Option<&str>) {
+    use std::io::IsTerminal;
+    let isatty = std::io::stderr().is_terminal();
+    let (red, bold, dim, reset) = if isatty {
+        ("\x1b[31;1m", "\x1b[1m", "\x1b[2m", "\x1b[0m")
+    } else {
+        ("", "", "", "")
+    };
+
+    eprintln!("{}error[{}]{}: {}{}{}", red, code, reset, bold, message, reset);
+    if line > 0 {
+        eprintln!("{}  --> {}{}:{}", dim, reset, path, line);
+        if let Some(src) = source {
+            let lines: Vec<&str> = src.lines().collect();
+            let lo = line.saturating_sub(2).max(1);
+            let hi = (line + 1).min(lines.len());
+            let width = hi.to_string().len();
+            eprintln!("{}{:>w$} |{}", dim, "", reset, w = width);
+            for n in lo..=hi {
+                if n == 0 || n > lines.len() { continue; }
+                let mark = if n == line { ">" } else { " " };
+                let txt = lines[n - 1];
+                if n == line {
+                    eprintln!("{}{:>w$} |{} {} {}{}{}", dim, n, reset, mark, red, txt, reset, w = width);
+                } else {
+                    eprintln!("{}{:>w$} |{} {} {}", dim, n, reset, mark, txt, w = width);
+                }
+            }
+            eprintln!("{}{:>w$} |{}", dim, "", reset, w = width);
+        }
+    } else {
+        eprintln!("{}  --> {}{}", dim, reset, path);
+    }
+    eprintln!("{}// {} error {} string {}{}", dim, stage, code, line, reset);
 }
 
 /// Signal value carried in `Result::Err` to mean "non-error early return"
@@ -97,7 +144,7 @@ fn deserialize_value(s: &str) -> Value {
     Value::Str(s.to_string())
 }
 
-pub fn run(program: &Program) -> Result<(), RuntimeError> {
+pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), RuntimeError> {
     let known_modules: HashSet<&str> = [
         "web", "browser", "system", "os",
         "linux", "windows", "macos",
@@ -129,6 +176,8 @@ pub fn run(program: &Program) -> Result<(), RuntimeError> {
         functions,
         strict,
         capturing: false,
+        source: source.to_string(),
+        script_path: script_path.to_string(),
     };
 
     let main = ctx.functions.get("main").cloned()
@@ -214,8 +263,19 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
         }
         Stmt::Call { segments, line } => {
             let resolved = resolve_segments(segments, ctx)?;
-            stdlib::dispatch_resolved(&resolved, *line, ctx)?;
-            Ok(())
+            match stdlib::dispatch_resolved(&resolved, *line, ctx) {
+                Ok(_) => Ok(()),
+                Err(e) if e.code == RETURN_SIGNAL_CODE => Err(e),
+                Err(e) => {
+                    if ctx.strict {
+                        // In strict mode let the top-level reporter print it once.
+                        Err(e)
+                    } else {
+                        ctx.report_error(e.code, e.line, &e.message);
+                        Ok(())
+                    }
+                }
+            }
         }
         Stmt::Return { expr, line: _ } => {
             let v = match expr {

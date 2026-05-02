@@ -40,8 +40,7 @@ pub fn run_command(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
                 Ok(Value::Str(stdout_str))
             } else {
                 let code = o.status.code().unwrap_or(1) as i64;
-                eprintln!("error {} string {}", 400 + code, line);
-                Ok(Value::Nil)
+                Err(RuntimeError::new(400 + code, line, format!("run_command exited with {}", code)))
             }
         }
         Err(e) => Err(RuntimeError::new(500, line, format!("run_command failed: {}", e))),
@@ -104,7 +103,7 @@ pub fn create_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let content = nth_str(args, 1, line, "create_file").unwrap_or_default();
     match fs::write(&path, content.as_bytes()) {
         Ok(_) => { println!("created: {}", path); println!("completed"); Ok(Value::Str(path)) }
-        Err(e) => { eprintln!("error 500 string {}  // create_file: {}", line, e); Ok(Value::Nil) }
+        Err(e) => Err(RuntimeError::new(500, line, format!("create_file({}): {}", path, e))),
     }
 }
 
@@ -119,7 +118,7 @@ pub fn read_file(args: &[Value], line: usize, capturing: bool) -> Result<Value, 
             }
             Ok(Value::Str(s))
         }
-        Err(e) => { eprintln!("error 404 string {}  // read_file: {}", line, e); Ok(Value::Nil) }
+        Err(e) => Err(RuntimeError::new(404, line, format!("read_file({}): {}", path, e))),
     }
 }
 
@@ -128,7 +127,7 @@ pub fn edit_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let content = nth_str(args, 1, line, "edit_file")?;
     match fs::write(&path, content.as_bytes()) {
         Ok(_) => { println!("edited: {}", path); println!("completed"); Ok(Value::Str(path)) }
-        Err(e) => { eprintln!("error 500 string {}  // edit_file: {}", line, e); Ok(Value::Nil) }
+        Err(e) => Err(RuntimeError::new(500, line, format!("edit_file({}): {}", path, e))),
     }
 }
 
@@ -136,7 +135,7 @@ pub fn delete_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let path = first_str(args, line, "delete_file")?;
     match fs::remove_file(&path) {
         Ok(_) => { println!("deleted: {}", path); println!("completed"); Ok(Value::Bool(true)) }
-        Err(e) => { eprintln!("error 404 string {}  // delete_file: {}", line, e); Ok(Value::Bool(false)) }
+        Err(e) => Err(RuntimeError::new(404, line, format!("delete_file({}): {}", path, e))),
     }
 }
 
