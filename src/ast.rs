@@ -18,6 +18,7 @@ pub struct Function {
 pub enum Value {
     Str(String),
     Int(i64),
+    Float(f64),
     Bool(bool),
     List(Vec<Value>),
     Nil,
@@ -28,6 +29,13 @@ impl Value {
         match self {
             Value::Str(s) => s.clone(),
             Value::Int(i) => i.to_string(),
+            Value::Float(f) => {
+                if f.is_finite() && *f == f.trunc() && f.abs() < 1e16 {
+                    format!("{:.1}", f)
+                } else {
+                    format!("{}", f)
+                }
+            }
             Value::Bool(b) => b.to_string(),
             Value::Nil => String::new(),
             Value::List(items) => {
@@ -37,31 +45,57 @@ impl Value {
         }
     }
 
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Int(i) => Some(*i as f64),
+            Value::Float(f) => Some(*f),
+            Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            Value::Str(s) => s.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+    }
+
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Bool(b) => *b,
             Value::Nil => false,
             Value::Int(n) => *n != 0,
+            Value::Float(f) => *f != 0.0 && !f.is_nan(),
             Value::Str(s) => !s.is_empty(),
             Value::List(items) => !items.is_empty(),
         }
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BinOp { Add, Sub, Mul, Div, Mod, Pow }
+
+#[derive(Debug, Clone, Copy)]
+pub enum UnaryOp { Neg }
+
 #[derive(Debug, Clone)]
 pub enum Expr {
     Lit(Value),
     Var(String),
     List(Vec<Expr>),
-    /// A command call as a value-producing expression: `read_file("/tmp/x")`
     Call {
         segments: Vec<CallSegment>,
         line: usize,
     },
-    /// User function call: `my_fn(x, y)`
     FnCall {
         name: String,
         args: Vec<Expr>,
+        line: usize,
+    },
+    Binary {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        line: usize,
+    },
+    Unary {
+        op: UnaryOp,
+        expr: Box<Expr>,
         line: usize,
     },
 }

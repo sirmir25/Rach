@@ -3,6 +3,7 @@ pub enum Tok {
     Word(String),
     Str(String),
     Int(i64),
+    Float(f64),
     LParen,
     RParen,
     LBracket,
@@ -11,6 +12,12 @@ pub enum Tok {
     Equals,
     Colon,
     Newline,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Caret,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +78,12 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
         if c == ',' { push(&mut tokens, Tok::Comma,  line, tok_col); i += 1; col += 1; continue; }
         if c == '=' { push(&mut tokens, Tok::Equals, line, tok_col); i += 1; col += 1; continue; }
         if c == ':' { push(&mut tokens, Tok::Colon,  line, tok_col); i += 1; col += 1; continue; }
+        if c == '+' { push(&mut tokens, Tok::Plus,   line, tok_col); i += 1; col += 1; continue; }
+        if c == '-' { push(&mut tokens, Tok::Minus,  line, tok_col); i += 1; col += 1; continue; }
+        if c == '*' { push(&mut tokens, Tok::Star,   line, tok_col); i += 1; col += 1; continue; }
+        if c == '/' { push(&mut tokens, Tok::Slash,  line, tok_col); i += 1; col += 1; continue; }
+        if c == '%' { push(&mut tokens, Tok::Percent, line, tok_col); i += 1; col += 1; continue; }
+        if c == '^' { push(&mut tokens, Tok::Caret,  line, tok_col); i += 1; col += 1; continue; }
 
         if c == '"' {
             let start_line = line;
@@ -110,17 +123,31 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
             continue;
         }
 
-        if c.is_ascii_digit() || (c == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()) {
+        if c.is_ascii_digit() {
             let start = i;
             let start_col = tok_col;
-            if chars[i] == '-' { i += 1; col += 1; }
             while i < chars.len() && chars[i].is_ascii_digit() {
                 i += 1;
                 col += 1;
             }
+            let mut is_float = false;
+            if i + 1 < chars.len() && chars[i] == '.' && chars[i + 1].is_ascii_digit() {
+                is_float = true;
+                i += 1;
+                col += 1;
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                    col += 1;
+                }
+            }
             let lit: String = chars[start..i].iter().collect();
-            let n: i64 = lit.parse().map_err(|_| LexError { line, message: format!("bad number {}", lit) })?;
-            tokens.push(Token { tok: Tok::Int(n), line, col: start_col });
+            if is_float {
+                let f: f64 = lit.parse().map_err(|_| LexError { line, message: format!("bad float {}", lit) })?;
+                tokens.push(Token { tok: Tok::Float(f), line, col: start_col });
+            } else {
+                let n: i64 = lit.parse().map_err(|_| LexError { line, message: format!("bad number {}", lit) })?;
+                tokens.push(Token { tok: Tok::Int(n), line, col: start_col });
+            }
             continue;
         }
 

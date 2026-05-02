@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::{BashAction, CallSegment, Expr, Function, Program, Stmt, Value};
+use crate::ast::{BashAction, BinOp, CallSegment, Expr, Function, Program, Stmt, UnaryOp, Value};
 use crate::stdlib;
 use crate::stdlib::webdriver::Session;
 use crate::stdlib::ResolvedSegment;
@@ -112,11 +112,11 @@ fn return_signal(value: Value) -> RuntimeError {
 }
 
 fn serialize_value(v: &Value) -> String {
-    // Use a sentinel-tagged form so we can round-trip exactly the value.
     match v {
         Value::Nil => "N::nil".into(),
         Value::Bool(b) => format!("N::bool::{}", b),
         Value::Int(n) => format!("N::int::{}", n),
+        Value::Float(f) => format!("N::float::{}", f),
         Value::Str(s) => format!("N::str::{}", s),
         Value::List(items) => {
             let parts: Vec<String> = items.iter().map(serialize_value).collect();
@@ -132,6 +132,9 @@ fn deserialize_value(s: &str) -> Value {
     }
     if let Some(rest) = s.strip_prefix("N::int::") {
         return Value::Int(rest.parse().unwrap_or(0));
+    }
+    if let Some(rest) = s.strip_prefix("N::float::") {
+        return Value::Float(rest.parse().unwrap_or(0.0));
     }
     if let Some(rest) = s.strip_prefix("N::str::") {
         return Value::Str(rest.to_string());
@@ -392,6 +395,62 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
                 Ok(()) => Ok(Value::Nil),
                 Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(deserialize_value(&e.message)),
                 Err(e) => Err(e),
+            }
+        }
+        Expr::Binary { op, lhs, rhs, line } => {
+            let l = eval_expr(lhs, ctx)?;
+            let r = eval_expr(rhs, ctx)?;
+            eval_binary(*op, &l, &r, *line)
+        }
+        Expr::Unary { op, expr, line } => {
+            let v = eval_expr(expr, ctx)?;
+            eval_unary(*op, &v, *line)
+        }
+    }
+}
+
+fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, RuntimeError> {
+    if matches!(op, BinOp::Add) {
+        if let (Value::Str(a), Value::Str(b)) = (l, r) {
+            return Ok(Value::Str(format!("{}{}", a, b)));
+        }
+    }
+
+    let lf = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {:?} as number", l)))?;
+    let rf = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {:?} as number", r)))?;
+    let both_int = matches!((l, r), (Value::Int(_), Value::Int(_)));
+
+    let result = match op {
+        BinOp::Add => lf + rf,
+        BinOp::Sub => lf - rf,
+        BinOp::Mul => lf * rf,
+        BinOp::Div => {
+            if rf == 0.0 { return Err(RuntimeError::new(400, line, "division by zero")); }
+            lf / rf
+        }
+        BinOp::Mod => {
+            if rf == 0.0 { return Err(RuntimeError::new(400, line, "modulo by zero")); }
+            lf.rem_euclid(rf)
+        }
+        BinOp::Pow => lf.powf(rf),
+    };
+
+    let stay_int = both_int && !matches!(op, BinOp::Div | BinOp::Pow) && result == result.trunc();
+    if stay_int {
+        Ok(Value::Int(result as i64))
+    } else {
+        Ok(Value::Float(result))
+    }
+}
+
+fn eval_unary(op: UnaryOp, v: &Value, line: usize) -> Result<Value, RuntimeError> {
+    match op {
+        UnaryOp::Neg => match v {
+            Value::Int(n) => Ok(Value::Int(-n)),
+            Value::Float(f) => Ok(Value::Float(-f)),
+            other => {
+                let f = other.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot negate {:?}", other)))?;
+                Ok(Value::Float(-f))
             }
         }
     }

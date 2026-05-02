@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::ast::{BashAction, CallSegment, Expr, Function, Program, Stmt, Value};
+use crate::ast::{BashAction, BinOp, CallSegment, Expr, Function, Program, Stmt, UnaryOp, Value};
 use crate::lexer::{Tok, Token};
 
 #[derive(Debug)]
@@ -355,31 +355,27 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         return Ok(Stmt::For { var, iter, body, line: head_line });
     }
 
-    // `WORD = ...` — variable assignment shorthand for `set` OR bash DSL.
-    // To stay backward-compatible with `bash = generate ...` we treat any
-    // `WORD = WORD ...` (RHS starting with a bare word that isn't a string,
-    // int, or call) as a bash DSL line. Strings and calls go through `set`.
+    // `WORD = ...` — variable assignment OR legacy bash DSL.
+    // Bash DSL is opt-in via known head keywords on the RHS (`generate`,
+    // `search`, `web`, `complete`). Anything else is treated as `set`,
+    // including arithmetic like `y = x * 2 + 1`.
     if let Some(Tok::Equals) = p.peek_at(1).map(|t| t.tok.clone()) {
-        // Look at what's on the RHS.
-        let rhs_first = p.peek_at(2).map(|t| t.tok.clone());
-        let is_set_form = matches!(&rhs_first,
-            Some(Tok::Str(_)) | Some(Tok::Int(_)) | Some(Tok::LBracket)
-        ) || matches!(&rhs_first,
-            Some(Tok::Word(w)) if matches!(p.peek_at(3).map(|t| t.tok.clone()), Some(Tok::LParen))
+        let is_bash_dsl = matches!(p.peek_at(2).map(|t| t.tok.clone()),
+            Some(Tok::Word(w)) if matches!(w.as_str(), "generate" | "search" | "web" | "complete")
         );
 
-        if is_set_form {
-            p.next(); // word
-            p.next(); // =
-            let expr = parse_expr(p)?;
-            p.expect_newline()?;
-            return Ok(Stmt::Set { name: word, expr, line: head_line });
-        } else {
+        if is_bash_dsl {
             p.next(); // word
             p.next(); // =
             let (action, argument) = parse_bash_dsl_rhs(p)?;
             p.expect_newline()?;
             return Ok(Stmt::BashDsl { action, argument, line: head_line });
+        } else {
+            p.next(); // word
+            p.next(); // =
+            let expr = parse_expr(p)?;
+            p.expect_newline()?;
+            return Ok(Stmt::Set { name: word, expr, line: head_line });
         }
     }
 
@@ -537,14 +533,81 @@ fn parse_arglist(p: &mut P) -> Result<(Vec<Expr>, BTreeMap<String, Expr>), Parse
     Ok((positional, named))
 }
 
-/// Parse a single expression. Order of precedence handled here:
-/// list literal `[...]`, fn-call `name(...)`, command call `read_file("x")`,
-/// variable, literal.
+/// Parse a full expression with operator precedence:
+///   add/sub  →  mul/div/mod  →  pow (right-assoc)  →  unary  →  primary.
 pub fn parse_expr(p: &mut P) -> Result<Expr, ParseError> {
+    parse_additive(p)
+}
+
+fn parse_additive(p: &mut P) -> Result<Expr, ParseError> {
+    let mut left = parse_multiplicative(p)?;
+    loop {
+        let op = match p.peek().map(|t| t.tok.clone()) {
+            Some(Tok::Plus) => BinOp::Add,
+            Some(Tok::Minus) => BinOp::Sub,
+            _ => break,
+        };
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_multiplicative(p)?;
+        left = Expr::Binary { op, lhs: Box::new(left), rhs: Box::new(right), line };
+    }
+    Ok(left)
+}
+
+fn parse_multiplicative(p: &mut P) -> Result<Expr, ParseError> {
+    let mut left = parse_power(p)?;
+    loop {
+        let op = match p.peek().map(|t| t.tok.clone()) {
+            Some(Tok::Star) => BinOp::Mul,
+            Some(Tok::Slash) => BinOp::Div,
+            Some(Tok::Percent) => BinOp::Mod,
+            _ => break,
+        };
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_power(p)?;
+        left = Expr::Binary { op, lhs: Box::new(left), rhs: Box::new(right), line };
+    }
+    Ok(left)
+}
+
+fn parse_power(p: &mut P) -> Result<Expr, ParseError> {
+    let left = parse_unary(p)?;
+    if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Caret)) {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_power(p)?;
+        return Ok(Expr::Binary { op: BinOp::Pow, lhs: Box::new(left), rhs: Box::new(right), line });
+    }
+    Ok(left)
+}
+
+fn parse_unary(p: &mut P) -> Result<Expr, ParseError> {
+    match p.peek().map(|t| t.tok.clone()) {
+        Some(Tok::Minus) => {
+            let line = p.peek().map(|t| t.line).unwrap_or(0);
+            p.next();
+            let inner = parse_unary(p)?;
+            Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(inner), line })
+        }
+        Some(Tok::Plus) => { p.next(); parse_unary(p) }
+        _ => parse_primary(p),
+    }
+}
+
+fn parse_primary(p: &mut P) -> Result<Expr, ParseError> {
     let head = p.peek().cloned().ok_or_else(|| ParseError::at(None, "expected expression"))?;
     match head.tok.clone() {
         Tok::Str(s) => { p.next(); Ok(Expr::Lit(Value::Str(s))) }
         Tok::Int(n) => { p.next(); Ok(Expr::Lit(Value::Int(n))) }
+        Tok::Float(f) => { p.next(); Ok(Expr::Lit(Value::Float(f))) }
+        Tok::LParen => {
+            p.next();
+            let inner = parse_expr(p)?;
+            p.expect_tok(&Tok::RParen, "`)`")?;
+            Ok(inner)
+        }
         Tok::LBracket => {
             p.next();
             let mut items = Vec::new();

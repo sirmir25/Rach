@@ -2,6 +2,7 @@ pub mod ai;
 pub mod ascii;
 pub mod bash;
 pub mod drivers;
+pub mod math;
 pub mod native;
 pub mod os;
 pub mod system;
@@ -36,6 +37,12 @@ const KNOWN: &[&str] = &[
     // native (C / C++)
     "native_crc32", "native_base64", "native_sort_ints", "native_reverse",
     "run_c", "run_cpp",
+    // math
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+    "sqrt", "exp", "log", "log10", "log2", "pow",
+    "abs", "floor", "ceil", "round",
+    "min", "max", "sum", "avg",
+    "radians", "degrees", "pi", "e",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -216,6 +223,33 @@ pub fn dispatch(
         "native_reverse"   => native::native_reverse(positional, line, ctx),
         "run_c"            => native::run_c(positional, line, ctx),
         "run_cpp"          => native::run_cpp(positional, line, ctx),
+
+        // ---- math ----
+        "sin"     => math::sin(positional, line, ctx),
+        "cos"     => math::cos(positional, line, ctx),
+        "tan"     => math::tan(positional, line, ctx),
+        "asin"    => math::asin(positional, line, ctx),
+        "acos"    => math::acos(positional, line, ctx),
+        "atan"    => math::atan(positional, line, ctx),
+        "atan2"   => math::atan2(positional, line, ctx),
+        "sqrt"    => math::sqrt(positional, line, ctx),
+        "exp"     => math::exp(positional, line, ctx),
+        "log"     => math::log(positional, line, ctx),
+        "log10"   => math::log10(positional, line, ctx),
+        "log2"    => math::log2(positional, line, ctx),
+        "pow"     => math::pow(positional, line, ctx),
+        "abs"     => math::abs(positional, line, ctx),
+        "floor"   => math::floor(positional, line, ctx),
+        "ceil"    => math::ceil(positional, line, ctx),
+        "round"   => math::round(positional, line, ctx),
+        "min"     => math::min(positional, line, ctx),
+        "max"     => math::max(positional, line, ctx),
+        "sum"     => math::sum(positional, line, ctx),
+        "avg"     => math::avg(positional, line, ctx),
+        "radians" => math::radians(positional, line, ctx),
+        "degrees" => math::degrees(positional, line, ctx),
+        "pi"      => math::pi(positional, line, ctx),
+        "e"       => math::e_const(positional, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{}`", other))),
     }
