@@ -86,14 +86,55 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
         break;
     }
 
-    while let Some(tok) = p.peek().cloned() {
-        match &tok.tok {
-            Tok::Word(w) if w == "rach" => {
-                let f = parse_function(&mut p)?;
-                functions.push(f);
-                p.skip_newlines();
+    // Two top-level forms accepted:
+    //
+    //   1. Legacy "wrapped":   `rach main(0) ... return(end) (end0)` blocks. Multiple
+    //      functions (main + helpers) all use this form.
+    //
+    //   2. Top-level script:   bare statements at the file root. The parser
+    //      synthesises a `main(0)` wrapper around them. Helper functions can
+    //      still be declared after the implicit main body using `rach name(...)`.
+    let starts_with_function = matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(w)) if w == "rach");
+
+    if starts_with_function {
+        while let Some(tok) = p.peek().cloned() {
+            match &tok.tok {
+                Tok::Word(w) if w == "rach" => {
+                    let f = parse_function(&mut p)?;
+                    functions.push(f);
+                    p.skip_newlines();
+                }
+                _ => return Err(ParseError::at(Some(&tok), format!("expected `rach` or `import`, got `{:?}`", tok.tok))),
             }
-            _ => return Err(ParseError::at(Some(&tok), format!("expected `rach` or `import`, got `{:?}`", tok.tok))),
+        }
+    } else {
+        // Synthesised main: collect top-level stmts until EOF or until we hit
+        // a `rach <name>(...)` declaration of a helper.
+        let mut main_body: Vec<Stmt> = Vec::new();
+        let main_line = p.peek().map(|t| t.line).unwrap_or(1);
+        loop {
+            p.skip_newlines();
+            let tok = match p.peek() { Some(t) => t.clone(), None => break };
+            if matches!(&tok.tok, Tok::Word(w) if w == "rach") { break; }
+            let stmt = parse_stmt(&mut p)?;
+            main_body.push(stmt);
+        }
+        functions.push(Function {
+            name: "main".to_string(),
+            params: Vec::new(),
+            body: main_body,
+            line: main_line,
+        });
+        // Any trailing helper functions
+        while let Some(tok) = p.peek().cloned() {
+            match &tok.tok {
+                Tok::Word(w) if w == "rach" => {
+                    let f = parse_function(&mut p)?;
+                    functions.push(f);
+                    p.skip_newlines();
+                }
+                _ => return Err(ParseError::at(Some(&tok), format!("expected `rach` or end of file, got `{:?}`", tok.tok))),
+            }
         }
     }
 

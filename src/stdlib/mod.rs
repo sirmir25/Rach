@@ -14,6 +14,10 @@ use crate::ast::{CallSegment, Value};
 use crate::interpreter::{Ctx, RuntimeError};
 
 const KNOWN: &[&str] = &[
+    // print / convenience
+    "print", "echo",
+    // short aliases (resolve to longer canonical names below)
+    "os", "read", "write", "exists", "del", "run", "sh", "rm",
     // system / os
     "detect_os", "reboot", "shutdown",
     "run_command", "install_package",
@@ -141,7 +145,27 @@ pub fn dispatch(
     line: usize,
     ctx: &mut Ctx,
 ) -> Result<Value, RuntimeError> {
-    match name {
+    // Short aliases — rewritten to canonical names so the rest of the
+    // dispatcher stays a single match statement.
+    let canonical: &str = match name {
+        "os" => "detect_os",
+        "read" => "read_file",
+        "write" => "create_file",
+        "exists" => "check_if_exists",
+        "del" | "rm" => "delete_file",
+        "run" | "sh" => "run_command",
+        "echo" => "print",
+        other => other,
+    };
+
+    match canonical {
+        // ---- print ----
+        "print" => {
+            let s: String = positional.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(" ");
+            println!("{}", s);
+            Ok(Value::Str(s))
+        }
+
         // ---- system / os ----
         "detect_os" => os::detect_os(line, ctx),
         "reboot" => system::reboot(line),

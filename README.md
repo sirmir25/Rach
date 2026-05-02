@@ -74,7 +74,17 @@ For browser automation you also need one of:
 
 ## Hello, world
 
-`hello.rach`:
+The minimal `.rach` file is just commands, top to bottom — no `main`, no `import`, no end markers:
+
+```
+print("hello, rach")
+write("/tmp/hello.txt", "hi")
+read("/tmp/hello.txt")
+```
+
+Run: `rach hello.rach`.
+
+The longer "wrapped" form is still supported for back-compat and is necessary when you want helper functions:
 
 ```
 import os
@@ -83,54 +93,27 @@ import system
 rach main(0)
     detect os()
     create_file("/tmp/hello.txt", "hello from Rach")
-    read_file("/tmp/hello.txt")
     completed
 return(end)
 (end0)
-```
-
-Run:
-
-```bash
-rach hello.rach
-```
-
-Output:
-
-```
-os: macos
-completed
-created: /tmp/hello.txt
-completed
-hello from Rach
-completed
-completed
 ```
 
 ---
 
 ## Script structure
 
-Each `.rach` file is:
+A file is one of:
 
-```
-import <module1>
-import <module2>
-...
-
-rach <name>(<arity>)
-    <commands>
-return(end)
-(end<N>)
-```
+1. **Top-level script** — bare statements; the parser wraps them in an implicit `main`. Helper functions, if any, follow the body.
+2. **Wrapped** — `rach main(0) ... return(end) (end0)` plus optional helpers in the same form.
 
 Rules:
 
-- A file must contain a function named `main` — execution starts there.
-- `<arity>` is an integer; always `0` for now (function arguments are not yet implemented, but the syntax already supports them).
-- `return(end)` marks the end of the function body, `(end0)` — the end of the file. `(end0)`, `(end1)` etc. are equivalent: the trailing digit carries no meaning, it's just part of the syntactic label.
+- `import` lines are optional; the stdlib is always available. Imports serve as documentation of intent.
 - Comments: `#` or `//` until end of line.
-- Indentation is significant only inside `if linux/macos/windows` blocks.
+- Indentation is significant only inside `if`/`for`/`else` blocks.
+- The `set` keyword is optional: `x = 5` works the same as `set x = 5`.
+- The `completed` keyword is also optional — every command prints `completed` on success automatically.
 
 ---
 
@@ -226,6 +209,20 @@ wait seconds(3)                          // → wait_seconds(3)
 ```
 
 The command name is resolved by the interpreter: it searches for the longest prefix of words matching a known command. The remaining words + their `(...)` become keyword arguments.
+
+### Short aliases
+
+The most common stdlib commands have one-word aliases — pick whichever feels shorter:
+
+| Short          | Canonical                |
+|----------------|--------------------------|
+| `os()`         | `detect_os()`            |
+| `read(path)`   | `read_file(path)`        |
+| `write(p, c)`  | `create_file(p, c)`      |
+| `exists(path)` | `check_if_exists(path)`  |
+| `del(path)` / `rm(path)` | `delete_file(path)` |
+| `run(cmd)` / `sh(cmd)`   | `run_command(cmd)`  |
+| `print(x)` / `echo(x)`   | line print to stdout |
 
 ### os / system
 
