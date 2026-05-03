@@ -1,0 +1,202 @@
+(* =====================================================================
+   grammar.ebnf — формальная грамматика языка
+   нотация: EBNF, * = 0+, + = 1+, ? = 0/1, | = или, () = группа
+   ===================================================================== *)
+
+(* --- Программа --- *)
+
+program        = { import_decl } , { top_decl } ;
+
+import_decl    = "import" , module_path , [ "as" , ident
+                                          | "." , import_list ] ;
+import_list    = "{" , ident , { "," , ident } , "}" ;
+module_path    = ident , { "." , ident } ;
+
+top_decl       = const_decl
+               | fn_decl
+               | struct_decl
+               | enum_decl
+               | trait_decl
+               | impl_decl
+               | type_decl
+               | export_decl ;
+
+export_decl    = "export" , ident , { "," , ident } ;
+
+(* --- Объявления --- *)
+
+const_decl     = "const" , ident , [ ":" , type ] , "=" , expr ;
+let_decl       = "let" , pattern , [ ":" , type ] , "=" , expr ;
+var_decl       = "var" , ident   , [ ":" , type ] , "=" , expr ;
+
+type_decl      = "type" , ident , [ generics ] , "=" , type ;
+
+fn_decl        = [ "async" ] , "fn" , ident , [ generics ] ,
+                 "(" , [ params ] , ")" ,
+                 [ "->" , type ] , block ;
+
+params         = param , { "," , param } , [ "," , vararg ] ;
+param          = [ "mut" ] , ident , ":" , type , [ "=" , expr ] ;
+vararg         = ident , ":" , "..." , type ;
+
+generics       = "<" , generic_param , { "," , generic_param } , ">" ;
+generic_param  = ident , [ ":" , type_bound { "+" , type_bound } ] ;
+type_bound     = path ;
+
+struct_decl    = "struct" , ident , [ generics ] , "{" ,
+                   { struct_field } , "}" ;
+struct_field   = ident , ":" , type , [ "," ] ;
+
+enum_decl      = "enum" , ident , [ generics ] , "{" ,
+                   enum_variant , { "," , enum_variant } , [ "," ] , "}" ;
+enum_variant   = ident , [ "(" , variant_payload , ")"
+                         | "{" , struct_field , { "," , struct_field } , "}" ] ;
+variant_payload = ( ident , ":" , type ) , { "," , ident , ":" , type }
+                | type , { "," , type } ;
+
+trait_decl     = "trait" , ident , [ generics ] , "{" ,
+                   { trait_member } , "}" ;
+trait_member   = fn_signature , [ block ] ;
+fn_signature   = "fn" , ident , [ generics ] ,
+                 "(" , [ "self" | "mut" , "self" ]
+                     , [ "," , params ] , ")" ,
+                 [ "->" , type ] ;
+
+impl_decl      = "impl" , [ generics ] ,
+                 [ path , "for" ] , type , "{" ,
+                   { fn_decl | op_decl } , "}" ;
+
+op_decl        = "op" , op_symbol ,
+                 "(" , [ "self" | "mut" , "self" ]
+                     , [ "," , params ] , ")" ,
+                 [ "->" , type ] , block ;
+
+op_symbol      = "+" | "-" | "*" | "/" | "%"
+               | "==" | "<" | "<=" | ">" | ">="
+               | "[]" | "()" ;
+
+(* --- Типы --- *)
+
+type           = base_type , [ "?" ] ;
+base_type      = path , [ "<" , type , { "," , type } , ">" ]
+               | "[" , type , "]"                    (* массив *)
+               | "{" , type , ":" , type , "}"       (* мапа *)
+               | "#{" , type , "}"                   (* множество *)
+               | "(" , [ type , { "," , type } ] , ")"  (* кортеж/unit *)
+               | "fn" , "(" , [ type , { "," , type } ] , ")" ,
+                        [ "->" , type ] ;
+path           = ident , { "." , ident } ;
+
+(* --- Pattern --- *)
+
+pattern        = literal_pat
+               | "_"
+               | ident                                  (* binding *)
+               | path , [ "(" , [ pattern , { "," , pattern } ] , ")"
+                        | "{" , field_pat , { "," , field_pat } ,
+                              [ "," , ".." ] , "}" ]
+               | "(" , [ pattern , { "," , pattern } ] , ")"
+               | "[" , [ pattern , { "," , pattern } ,
+                         [ "," , ".." , [ ident ] ] ] , "]" ;
+field_pat      = ident , [ ":" , pattern ] ;
+literal_pat    = literal ;
+
+(* --- Выражения --- *)
+
+block          = "{" , { stmt } , [ expr ] , "}" ;
+
+stmt           = let_decl
+               | var_decl
+               | expr_stmt
+               | "return" , [ expr ]
+               | "break"  , [ label ] , [ expr ]
+               | "continue" , [ label ]
+               | "defer" , expr ;
+expr_stmt      = expr ;
+
+(* приоритеты от низкого к высокому *)
+expr           = assign_expr ;
+assign_expr    = pipe_expr , { ( "=" | "+=" | "-=" | "*=" | "/=" | "%=" ) , pipe_expr } ;
+pipe_expr      = or_expr   , { "|>" , or_expr } ;
+or_expr        = and_expr  , { "or" , and_expr } ;
+and_expr       = not_expr  , { "and" , not_expr } ;
+not_expr       = [ "not" ] , cmp_expr ;
+cmp_expr       = range_expr , { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) , range_expr } ;
+range_expr     = add_expr , [ ( ".." | "..=" ) , add_expr ] ;
+add_expr       = mul_expr , { ( "+" | "-" ) , mul_expr } ;
+mul_expr       = unary_expr , { ( "*" | "/" | "%" ) , unary_expr } ;
+unary_expr     = [ "-" | "!" ] , postfix_expr ;
+postfix_expr   = primary , { call | index | field | "?" | ".await" } ;
+
+call           = "(" , [ arg , { "," , arg } ] , ")" , [ trailing_lambda ] ;
+arg            = [ ident , ":" ] , expr ;
+trailing_lambda = "{" , [ lambda_params , "=>" ] , { stmt } , [ expr ] , "}" ;
+index          = "[" , expr , "]" ;
+field          = ( "." | "?." ) , ident ;
+
+primary        = literal
+               | ident
+               | path
+               | "(" , expr , { "," , expr } , [ "," ] , ")"   (* tuple/grouping *)
+               | "[" , [ expr , { "," , expr } ] , "]"
+               | "{" , [ expr , ":" , expr , { "," , expr , ":" , expr } ] , "}"
+               | "#{" , [ expr , { "," , expr } ] , "}"
+               | struct_literal
+               | if_expr
+               | match_expr
+               | for_expr
+               | while_expr
+               | loop_expr
+               | lambda_expr
+               | block
+               | "spawn" , block
+               | "await.all" , "(" , expr , { "," , expr } , ")" ;
+
+struct_literal = path , "{" , [ field_init , { "," , field_init } , [ "," ] ] , "}" ;
+field_init     = ident , [ ":" , expr ] ;          (* shorthand: { name } *)
+
+if_expr        = "if" , expr , block ,
+                 { "else" , "if" , expr , block } ,
+                 [ "else" , block ] ;
+match_expr     = "match" , expr , "{" , match_arm , { "," , match_arm } ,
+                                  [ "," ] , "}" ;
+match_arm      = pattern , [ "if" , expr ] , "=>" , ( expr | block ) ;
+for_expr       = [ label , ":" ] , "for" , pattern , "in" , expr , block ;
+while_expr     = [ label , ":" ] , "while" , expr , block ;
+loop_expr      = [ label , ":" ] , "loop" , block ;
+label          = "'" , ident ;
+
+lambda_expr    = "(" , [ lambda_params ] , ")" , "=>" , ( expr | block )
+               | ident , "=>" , ( expr | block ) ;
+lambda_params  = ident , [ ":" , type ] , { "," , ident , [ ":" , type ] } ;
+
+(* --- Литералы --- *)
+
+literal        = int_lit | float_lit | bool_lit | char_lit | string_lit
+               | "none" | "true" | "false" ;
+int_lit        = decimal | hex | binary | octal ;
+decimal        = digit , { digit | "_" } ;
+hex            = "0x" , hex_digit , { hex_digit | "_" } ;
+binary         = "0b" , bin_digit , { bin_digit | "_" } ;
+octal          = "0o" , oct_digit , { oct_digit | "_" } ;
+float_lit      = decimal , "." , decimal , [ exp ]
+               | decimal , exp ;
+exp            = ( "e" | "E" ) , [ "+" | "-" ] , decimal ;
+bool_lit       = "true" | "false" ;
+char_lit       = "'" , char_inner , "'" ;
+string_lit     = '"' , { string_part } , '"'
+               | '"""' , { ? любой символ ? } , '"""' ;
+string_part    = char_inner | interpolation ;
+interpolation  = "${" , expr , "}" ;
+
+(* --- Лексика --- *)
+
+ident          = letter , { letter | digit | "_" } ;
+letter         = "a".."z" | "A".."Z" | "_" ;
+digit          = "0".."9" ;
+hex_digit      = digit | "a".."f" | "A".."F" ;
+bin_digit      = "0" | "1" ;
+oct_digit      = "0".."7" ;
+
+(* комментарии: //  и  /* ... */  и  ///  doc *)
+(* перевод строки = разделитель statement (как в Go) *)

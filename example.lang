@@ -1,0 +1,319 @@
+// =====================================================================
+// example.lang — полная демонстрация синтаксиса
+// C-like база, без лишней пунктуации, с современными конструкциями
+// =====================================================================
+
+// --- Импорты / экспорт -------------------------------------------------
+
+import std.io          // импорт всего модуля
+import std.math.{sin, cos, PI}   // выборочный импорт
+import std.collections as col    // алиас
+
+export fn greet, Person, MAX_SIZE
+
+
+// --- Константы ---------------------------------------------------------
+
+const MAX_SIZE: int = 1024
+const PI = 3.14159           // тип выводится
+const GREETING = "Hello, ${name}!"   // интерполяция
+
+
+// --- Переменные --------------------------------------------------------
+
+let name = "Ivan"            // immutable
+var counter = 0              // mutable
+let typed: float = 1.5       // явный тип
+let big = 1_000_000          // разделитель
+let hex = 0xFF_AA
+let bin = 0b1010_0101
+
+
+// --- Примитивные типы --------------------------------------------------
+// int, uint, i8/i16/i32/i64, u8/u16/u32/u64
+// float, f32, f64
+// bool, char, string
+// void, never
+
+
+// --- Коллекции (литералы) ---------------------------------------------
+
+let nums: [int] = [1, 2, 3, 4]
+let map: {string: int} = {"a": 1, "b": 2}
+let set: #{int} = #{1, 2, 3}
+let pair: (int, string) = (42, "answer")
+let range = 0..10            // полуоткрытый
+let inclusive = 0..=10       // включительно
+
+
+// --- Структуры ---------------------------------------------------------
+
+struct Person {
+    name: string
+    age: int
+    email: string?           // опциональное поле (Option<string>)
+}
+
+// конструктор / литерал
+let ivan = Person { name: "Ivan", age: 25, email: none }
+
+// методы через impl
+impl Person {
+    fn greet(self) -> string {
+        return "Hi, I am ${self.name}"
+    }
+
+    fn birthday(mut self) {
+        self.age += 1
+    }
+
+    // ассоциированная функция (без self)
+    fn anonymous() -> Person {
+        return Person { name: "?", age: 0, email: none }
+    }
+}
+
+
+// --- Enum (sum types) --------------------------------------------------
+
+enum Shape {
+    Circle(radius: float)
+    Rectangle(w: float, h: float)
+    Triangle { a: float, b: float, c: float }
+    Empty
+}
+
+enum Color { Red, Green, Blue }     // простые варианты
+
+
+// --- Type aliases ------------------------------------------------------
+
+type Id = int
+type Handler = fn(Request) -> Response
+type Pair<T> = (T, T)
+
+
+// --- Функции -----------------------------------------------------------
+
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+
+// возврат по последнему выражению (без return)
+fn square(x: int) -> int { x * x }
+
+// несколько возвращаемых значений (кортеж)
+fn divmod(a: int, b: int) -> (int, int) {
+    (a / b, a % b)
+}
+
+// дефолтные параметры
+fn greet(name: string, greeting: string = "Hello") -> string {
+    "${greeting}, ${name}"
+}
+
+// именованные аргументы при вызове
+let msg = greet(name: "Ivan", greeting: "Привет")
+
+// vararg
+fn sum(nums: ...int) -> int {
+    var total = 0
+    for n in nums { total += n }
+    total
+}
+
+
+// --- Дженерики ---------------------------------------------------------
+
+fn first<T>(xs: [T]) -> T? {
+    if xs.len() == 0 { return none }
+    some(xs[0])
+}
+
+struct Stack<T> {
+    items: [T]
+}
+
+impl<T> Stack<T> {
+    fn push(mut self, x: T) { self.items.push(x) }
+    fn pop(mut self)  -> T? { self.items.pop() }
+}
+
+// ограничения (trait bounds)
+fn max<T: Ord>(a: T, b: T) -> T {
+    if a > b { a } else { b }
+}
+
+
+// --- Trait / интерфейсы ------------------------------------------------
+
+trait Drawable {
+    fn draw(self)
+    fn area(self) -> float
+    fn describe(self) -> string {       // дефолтная реализация
+        "Shape with area ${self.area()}"
+    }
+}
+
+impl Drawable for Shape {
+    fn draw(self) { /* ... */ }
+    fn area(self) -> float {
+        match self {
+            Circle(r)        => PI * r * r
+            Rectangle(w, h)  => w * h
+            Triangle { a, b, c } => {
+                let s = (a + b + c) / 2.0
+                sqrt(s * (s-a) * (s-b) * (s-c))
+            }
+            Empty            => 0.0
+        }
+    }
+}
+
+
+// --- Lambdas / closures ------------------------------------------------
+
+let double = (x: int) => x * 2
+let inline = (x) => x + 1                // тип из контекста
+let block  = (x: int) => { let y = x + 1; y * 2 }
+
+// trailing-lambda синтаксис (приятно для DSL)
+let evens = nums.filter { x => x % 2 == 0 }
+let sum   = nums.reduce(0) { acc, x => acc + x }
+
+
+// --- Pipe оператор -----------------------------------------------------
+
+let result = data
+    |> filter { x => x > 0 }
+    |> map { x => x * 2 }
+    |> sum
+
+
+// --- Управление потоком ------------------------------------------------
+
+// if как выражение
+let label = if score >= 90 { "A" } else if score >= 80 { "B" } else { "C" }
+
+// for-in (единственный for)
+for x in nums { print(x) }
+for i in 0..10 { print(i) }
+for (i, x) in nums.enumerate() { print("${i}: ${x}") }
+for (key, val) in map { print("${key}=${val}") }
+
+// while / loop
+while counter < 10 { counter += 1 }
+loop {
+    if done() { break }
+}
+
+// break / continue с метками
+'outer: for i in 0..10 {
+    for j in 0..10 {
+        if i * j > 50 { break 'outer }
+    }
+}
+
+
+// --- Pattern matching --------------------------------------------------
+
+let desc = match shape {
+    Circle(r) if r > 10.0   => "big circle"
+    Circle(r)               => "circle r=${r}"
+    Rectangle(w, h)         => "rect ${w}x${h}"
+    Triangle { a, b, c }    => "triangle"
+    _                       => "unknown"
+}
+
+// деструктуризация в let
+let (x, y) = point
+let Person { name, age, .. } = ivan
+let [first, ..rest] = nums
+
+
+// --- Обработка ошибок: Result + Option ---------------------------------
+
+enum Result<T, E> { Ok(T), Err(E) }
+enum Option<T>    { Some(T), None }
+
+fn parse(s: string) -> Result<int, string> {
+    if s.is_empty() { return Err("empty") }
+    Ok(s.to_int())
+}
+
+// оператор ? — пробрасывает ошибку наверх
+fn double_parse(s: string) -> Result<int, string> {
+    let n = parse(s)?
+    Ok(n * 2)
+}
+
+// ?. для опциональных значений
+let len = user?.profile?.name?.len()
+
+
+// --- Defer (cleanup) ---------------------------------------------------
+
+fn read_file(path: string) -> Result<string, IoError> {
+    let f = File.open(path)?
+    defer f.close()              // выполнится при выходе из функции
+    f.read_all()
+}
+
+
+// --- Перегрузка операторов ---------------------------------------------
+
+struct Vec2 { x: float, y: float }
+
+impl Vec2 {
+    op + (self, other: Vec2) -> Vec2 {
+        Vec2 { x: self.x + other.x, y: self.y + other.y }
+    }
+    op == (self, other: Vec2) -> bool {
+        self.x == other.x and self.y == other.y
+    }
+    op [] (self, i: int) -> float {
+        if i == 0 { self.x } else { self.y }
+    }
+}
+
+
+// --- Concurrency (async/await) -----------------------------------------
+
+async fn fetch(url: string) -> Result<string, NetError> {
+    let resp = http.get(url).await?
+    Ok(resp.body)
+}
+
+async fn main() {
+    let (a, b) = await.all(
+        fetch("https://a.com"),
+        fetch("https://b.com"),
+    )
+}
+
+
+// --- Каналы / горутины (если нужно low-level) --------------------------
+
+let ch = Channel<int>(capacity: 10)
+spawn {
+    for i in 0..100 { ch.send(i) }
+    ch.close()
+}
+for x in ch { print(x) }
+
+
+// --- Точка входа -------------------------------------------------------
+
+fn main() {
+    let ivan = Person { name: "Ivan", age: 25, email: some("a@b.c") }
+    print(ivan.greet())
+
+    let shapes: [Shape] = [
+        Circle(radius: 5.0),
+        Rectangle(w: 3.0, h: 4.0),
+    ]
+
+    for s in shapes {
+        print("${s.describe()} — area=${s.area()}")
+    }
+}
