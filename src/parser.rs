@@ -237,11 +237,14 @@ fn parse_block(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError
             break;
         }
 
-        // `else:` ends the current block (it's consumed by the `if` parser)
+        // `else:` and `rescue` mark the boundaries of their parent if/try blocks.
         if matches!(&tok.tok, Tok::Word(w) if w == "else") {
             if let Some(Tok::Colon) = p.peek_at(1).map(|t| t.tok.clone()) {
                 break;
             }
+        }
+        if matches!(&tok.tok, Tok::Word(w) if w == "rescue") {
+            break;
         }
 
         let stmt = parse_stmt(p)?;
@@ -312,32 +315,106 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
 
     if word == "if" {
         p.next();
-        let mut negate = false;
-        if let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
-            if w == "not" { p.next(); negate = true; }
+        // Look ahead one token to decide: legacy `if [not] <os>:` vs general `if <expr>:`.
+        // Legacy form: optional `not`, then a bare OS keyword, then `:`.
+        let saved = p.pos;
+        let mut maybe_negate = false;
+        if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(ref w)) if w == "not") {
+            p.next();
+            maybe_negate = true;
         }
-        let os_tok = p.next().ok_or_else(|| ParseError::at(Some(&head), "expected os name"))?;
-        let os = match os_tok.tok {
-            Tok::Word(s) => s,
-            _ => return Err(ParseError::at(Some(&os_tok), "expected os name")),
-        };
+        let is_legacy_os = matches!(
+            (p.peek().map(|t| t.tok.clone()), p.peek_at(1).map(|t| t.tok.clone())),
+            (Some(Tok::Word(ref w)), Some(Tok::Colon))
+                if matches!(w.as_str(), "linux" | "macos" | "darwin" | "windows" | "bsd")
+        );
+
+        if is_legacy_os {
+            let os_tok = p.next().unwrap();
+            let os = match os_tok.tok { Tok::Word(s) => s, _ => unreachable!() };
+            p.expect_tok(&Tok::Colon, "`:`")?;
+            p.expect_newline()?;
+            let body = parse_block(p, head_col)?;
+            let else_body = parse_optional_else(p, head_col)?;
+            return Ok(Stmt::IfOs { os, negate: maybe_negate, body, else_body, line: head_line });
+        }
+
+        // Reset and parse as general expression-conditioned if.
+        p.pos = saved;
+        let cond = parse_expr(p)?;
         p.expect_tok(&Tok::Colon, "`:`")?;
         p.expect_newline()?;
         let body = parse_block(p, head_col)?;
+        let else_body = parse_optional_else(p, head_col)?;
+        return Ok(Stmt::If { cond, body, else_body, line: head_line });
+    }
 
-        // Optional `else:` at the SAME column as the `if`
-        let mut else_body: Option<Vec<Stmt>> = None;
+    if word == "while" {
+        p.next();
+        let cond = parse_expr(p)?;
+        p.expect_tok(&Tok::Colon, "`:`")?;
+        p.expect_newline()?;
+        let body = parse_block(p, head_col)?;
+        return Ok(Stmt::While { cond, body, line: head_line });
+    }
+
+    if word == "break" {
+        p.next();
+        p.expect_newline()?;
+        return Ok(Stmt::Break { line: head_line });
+    }
+
+    if word == "continue" {
+        p.next();
+        p.expect_newline()?;
+        return Ok(Stmt::Continue { line: head_line });
+    }
+
+    if word == "try" {
+        p.next();
+        p.expect_tok(&Tok::Colon, "`:`")?;
+        p.expect_newline()?;
+        let body = parse_block(p, head_col)?;
         p.skip_newlines();
-        if let Some(t) = p.peek().cloned() {
-            if matches!(&t.tok, Tok::Word(w) if w == "else") && t.col == head_col {
-                p.next();
-                p.expect_tok(&Tok::Colon, "`:`")?;
-                p.expect_newline()?;
-                let eb = parse_block(p, head_col)?;
-                else_body = Some(eb);
-            }
+        // Require `rescue [name]:` at the same column as `try`.
+        let rescue_tok = p.peek().cloned()
+            .ok_or_else(|| ParseError::at(None, "expected `rescue:` after `try:` block"))?;
+        if !matches!(&rescue_tok.tok, Tok::Word(w) if w == "rescue") || rescue_tok.col != head_col {
+            return Err(ParseError::at(Some(&rescue_tok), "expected `rescue:` at the same column as `try:`"));
         }
-        return Ok(Stmt::IfOs { os, negate, body, else_body, line: head_line });
+        p.next();
+        let rescue_var = if let Some(Tok::Word(name)) = p.peek().map(|t| t.tok.clone()) {
+            if name != "as" {
+                return Err(ParseError::at(p.peek(), "expected `as <name>:` or just `:`"));
+            }
+            p.next();
+            let name_tok = p.next().ok_or_else(|| ParseError::at(None, "expected name after `as`"))?;
+            match name_tok.tok {
+                Tok::Word(n) => Some(n),
+                _ => return Err(ParseError::at(Some(&name_tok), "expected identifier after `as`")),
+            }
+        } else {
+            None
+        };
+        p.expect_tok(&Tok::Colon, "`:`")?;
+        p.expect_newline()?;
+        let rescue_body = parse_block(p, head_col)?;
+        return Ok(Stmt::Try { body, rescue_var, rescue_body, line: head_line });
+    }
+
+    if word == "assert" {
+        p.next();
+        p.expect_tok(&Tok::LParen, "`(`")?;
+        let cond = parse_expr(p)?;
+        let message = if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Comma)) {
+            p.next();
+            Some(parse_expr(p)?)
+        } else {
+            None
+        };
+        p.expect_tok(&Tok::RParen, "`)`")?;
+        p.expect_newline()?;
+        return Ok(Stmt::Assert { cond, message, line: head_line });
     }
 
     if word == "for" {
@@ -533,10 +610,79 @@ fn parse_arglist(p: &mut P) -> Result<(Vec<Expr>, BTreeMap<String, Expr>), Parse
     Ok((positional, named))
 }
 
-/// Parse a full expression with operator precedence:
-///   add/sub  →  mul/div/mod  →  pow (right-assoc)  →  unary  →  primary.
+/// Pulls an `else:` block off the token stream if one is at `cond_col`.
+/// Used by both `if`-OS and `if`-expr.
+fn parse_optional_else(p: &mut P, cond_col: usize) -> Result<Option<Vec<Stmt>>, ParseError> {
+    p.skip_newlines();
+    if let Some(t) = p.peek().cloned() {
+        if matches!(&t.tok, Tok::Word(w) if w == "else") && t.col == cond_col {
+            p.next();
+            p.expect_tok(&Tok::Colon, "`:`")?;
+            p.expect_newline()?;
+            let body = parse_block(p, cond_col)?;
+            return Ok(Some(body));
+        }
+    }
+    Ok(None)
+}
+
+/// Parse a full expression with operator precedence (low to high):
+///   or  →  and  →  not  →  comparison  →  add/sub  →  mul/div/mod
+///   →  pow (right-assoc)  →  unary  →  primary.
 pub fn parse_expr(p: &mut P) -> Result<Expr, ParseError> {
-    parse_additive(p)
+    parse_logical_or(p)
+}
+
+fn parse_logical_or(p: &mut P) -> Result<Expr, ParseError> {
+    let mut left = parse_logical_and(p)?;
+    while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(ref w)) if w == "or") {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_logical_and(p)?;
+        left = Expr::Binary { op: BinOp::Or, lhs: Box::new(left), rhs: Box::new(right), line };
+    }
+    Ok(left)
+}
+
+fn parse_logical_and(p: &mut P) -> Result<Expr, ParseError> {
+    let mut left = parse_logical_not(p)?;
+    while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(ref w)) if w == "and") {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_logical_not(p)?;
+        left = Expr::Binary { op: BinOp::And, lhs: Box::new(left), rhs: Box::new(right), line };
+    }
+    Ok(left)
+}
+
+fn parse_logical_not(p: &mut P) -> Result<Expr, ParseError> {
+    if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(ref w)) if w == "not") {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let inner = parse_logical_not(p)?;
+        return Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(inner), line });
+    }
+    parse_comparison(p)
+}
+
+fn parse_comparison(p: &mut P) -> Result<Expr, ParseError> {
+    let left = parse_additive(p)?;
+    let op = match p.peek().map(|t| t.tok.clone()) {
+        Some(Tok::EqEq)  => Some(BinOp::Eq),
+        Some(Tok::BangEq) => Some(BinOp::Ne),
+        Some(Tok::Lt)    => Some(BinOp::Lt),
+        Some(Tok::Gt)    => Some(BinOp::Gt),
+        Some(Tok::LtEq)  => Some(BinOp::Le),
+        Some(Tok::GtEq)  => Some(BinOp::Ge),
+        _ => None,
+    };
+    if let Some(op) = op {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_additive(p)?;
+        return Ok(Expr::Binary { op, lhs: Box::new(left), rhs: Box::new(right), line });
+    }
+    Ok(left)
 }
 
 fn parse_additive(p: &mut P) -> Result<Expr, ParseError> {
@@ -597,11 +743,47 @@ fn parse_unary(p: &mut P) -> Result<Expr, ParseError> {
 }
 
 fn parse_primary(p: &mut P) -> Result<Expr, ParseError> {
+    let base = parse_atom(p)?;
+    parse_indexing(p, base)
+}
+
+/// `expr[key][key2]...` — postfix indexing into list/map.
+fn parse_indexing(p: &mut P, mut target: Expr) -> Result<Expr, ParseError> {
+    while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::LBracket)) {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let key = parse_expr(p)?;
+        p.expect_tok(&Tok::RBracket, "`]`")?;
+        target = Expr::Index { target: Box::new(target), key: Box::new(key), line };
+    }
+    Ok(target)
+}
+
+fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
     let head = p.peek().cloned().ok_or_else(|| ParseError::at(None, "expected expression"))?;
     match head.tok.clone() {
         Tok::Str(s) => { p.next(); Ok(Expr::Lit(Value::Str(s))) }
         Tok::Int(n) => { p.next(); Ok(Expr::Lit(Value::Int(n))) }
         Tok::Float(f) => { p.next(); Ok(Expr::Lit(Value::Float(f))) }
+        Tok::LBrace => {
+            // Map literal: `{"key": value, "k2": v2}`
+            let line = head.line;
+            p.next();
+            let mut entries: Vec<(Expr, Expr)> = Vec::new();
+            loop {
+                match p.peek().map(|t| t.tok.clone()) {
+                    Some(Tok::RBrace) => { p.next(); break; }
+                    Some(Tok::Comma) => { p.next(); continue; }
+                    _ => {
+                        let k = parse_expr(p)?;
+                        p.expect_tok(&Tok::Colon, "`:`")?;
+                        let v = parse_expr(p)?;
+                        entries.push((k, v));
+                    }
+                }
+            }
+            Ok(Expr::MapLit { entries, line })
+        }
         Tok::LParen => {
             p.next();
             let inner = parse_expr(p)?;

@@ -8,6 +8,8 @@ pub enum Tok {
     RParen,
     LBracket,
     RBracket,
+    LBrace,
+    RBrace,
     Comma,
     Equals,
     Colon,
@@ -18,6 +20,12 @@ pub enum Tok {
     Slash,
     Percent,
     Caret,
+    EqEq,
+    BangEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
 }
 
 #[derive(Debug, Clone)]
@@ -75,8 +83,9 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
         if c == ')' { push(&mut tokens, Tok::RParen, line, tok_col); i += 1; col += 1; continue; }
         if c == '[' { push(&mut tokens, Tok::LBracket, line, tok_col); i += 1; col += 1; continue; }
         if c == ']' { push(&mut tokens, Tok::RBracket, line, tok_col); i += 1; col += 1; continue; }
+        if c == '{' { push(&mut tokens, Tok::LBrace, line, tok_col); i += 1; col += 1; continue; }
+        if c == '}' { push(&mut tokens, Tok::RBrace, line, tok_col); i += 1; col += 1; continue; }
         if c == ',' { push(&mut tokens, Tok::Comma,  line, tok_col); i += 1; col += 1; continue; }
-        if c == '=' { push(&mut tokens, Tok::Equals, line, tok_col); i += 1; col += 1; continue; }
         if c == ':' { push(&mut tokens, Tok::Colon,  line, tok_col); i += 1; col += 1; continue; }
         if c == '+' { push(&mut tokens, Tok::Plus,   line, tok_col); i += 1; col += 1; continue; }
         if c == '-' { push(&mut tokens, Tok::Minus,  line, tok_col); i += 1; col += 1; continue; }
@@ -84,6 +93,25 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
         if c == '/' { push(&mut tokens, Tok::Slash,  line, tok_col); i += 1; col += 1; continue; }
         if c == '%' { push(&mut tokens, Tok::Percent, line, tok_col); i += 1; col += 1; continue; }
         if c == '^' { push(&mut tokens, Tok::Caret,  line, tok_col); i += 1; col += 1; continue; }
+
+        if c == '=' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            push(&mut tokens, Tok::EqEq, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '=' { push(&mut tokens, Tok::Equals, line, tok_col); i += 1; col += 1; continue; }
+
+        if c == '!' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            push(&mut tokens, Tok::BangEq, line, tok_col); i += 2; col += 2; continue;
+        }
+
+        if c == '<' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            push(&mut tokens, Tok::LtEq, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '<' { push(&mut tokens, Tok::Lt, line, tok_col); i += 1; col += 1; continue; }
+
+        if c == '>' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            push(&mut tokens, Tok::GtEq, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '>' { push(&mut tokens, Tok::Gt, line, tok_col); i += 1; col += 1; continue; }
 
         if c == '"' {
             let start_line = line;

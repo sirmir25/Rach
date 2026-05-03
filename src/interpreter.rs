@@ -35,6 +35,9 @@ pub struct Ctx {
     /// True while evaluating the RHS of `set x = ...` — stdlib commands check
     /// this to skip side-effecting prints when their result is being captured.
     pub capturing: bool,
+    /// Depth of nested `try:` blocks. When > 0, runtime errors propagate
+    /// instead of being printed-and-continued.
+    pub try_depth: usize,
     /// Source text of the running script, used by the pretty error printer.
     pub source: String,
     /// Path of the running script, shown in error headers.
@@ -57,6 +60,14 @@ impl Ctx {
     }
 
     pub fn set_var(&mut self, name: String, value: Value) {
+        // If the variable already exists in any enclosing scope, update it there.
+        // Otherwise, create it in the topmost (current) scope.
+        for scope in self.scopes.iter_mut().rev() {
+            if scope.contains_key(&name) {
+                scope.insert(name, value);
+                return;
+            }
+        }
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, value);
         }
@@ -106,9 +117,11 @@ pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, message: &
     eprintln!("{}// {} error {} string {}{}", dim, stage, code, line, reset);
 }
 
-/// Signal value carried in `Result::Err` to mean "non-error early return"
-/// from a user function. Distinguished from real runtime errors by code 0.
-const RETURN_SIGNAL_CODE: i64 = -1;
+/// Signal codes carried in `RuntimeError::code` for non-error control flow.
+/// All real error codes are >= 0; signals are negative.
+const RETURN_SIGNAL_CODE:   i64 = -1;
+const BREAK_SIGNAL_CODE:    i64 = -2;
+const CONTINUE_SIGNAL_CODE: i64 = -3;
 
 fn return_signal(value: Value) -> RuntimeError {
     RuntimeError { code: RETURN_SIGNAL_CODE, line: 0, message: serialize_value(&value) }
@@ -124,6 +137,12 @@ fn serialize_value(v: &Value) -> String {
         Value::List(items) => {
             let parts: Vec<String> = items.iter().map(serialize_value).collect();
             format!("N::list::{}", parts.join("\u{1F}"))
+        }
+        Value::Map(items) => {
+            let parts: Vec<String> = items.iter()
+                .map(|(k, v)| format!("{}\u{1E}{}", k, serialize_value(v)))
+                .collect();
+            format!("N::map::{}", parts.join("\u{1F}"))
         }
     }
 }
@@ -147,6 +166,17 @@ fn deserialize_value(s: &str) -> Value {
         let items: Vec<Value> = rest.split('\u{1F}').map(deserialize_value).collect();
         return Value::List(items);
     }
+    if let Some(rest) = s.strip_prefix("N::map::") {
+        let mut map = std::collections::BTreeMap::new();
+        if !rest.is_empty() {
+            for entry in rest.split('\u{1F}') {
+                if let Some((k, v)) = entry.split_once('\u{1E}') {
+                    map.insert(k.to_string(), deserialize_value(v));
+                }
+            }
+        }
+        return Value::Map(map);
+    }
     Value::Str(s.to_string())
 }
 
@@ -162,6 +192,7 @@ pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
         functions: HashMap::new(),
         strict,
         capturing: false,
+        try_depth: 0,
         source,
         script_path,
         log: LogState::default(),
@@ -220,6 +251,7 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
         functions,
         strict,
         capturing: false,
+        try_depth: 0,
         source: source.to_string(),
         script_path: script_path.to_string(),
         log: LogState::default(),
@@ -273,8 +305,9 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
         }
         Stmt::For { var, iter, body, line } => {
             let v = eval_expr(iter, ctx)?;
-            let items = match v {
+            let items: Vec<Value> = match v {
                 Value::List(xs) => xs,
+                Value::Map(m) => m.into_keys().map(Value::Str).collect(),
                 Value::Str(s) => s.split(',').map(|x| Value::Str(x.trim().to_string())).collect(),
                 Value::Int(n) if n >= 0 => (0..n).map(Value::Int).collect(),
                 other => {
@@ -286,7 +319,73 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
                 ctx.set_var(var.clone(), item);
                 let res = run_block(body, ctx);
                 ctx.scopes.pop();
-                res?;
+                match res {
+                    Ok(()) => {}
+                    Err(e) if e.code == BREAK_SIGNAL_CODE => break,
+                    Err(e) if e.code == CONTINUE_SIGNAL_CODE => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
+        Stmt::If { cond, body, else_body, line: _ } => {
+            let v = eval_expr(cond, ctx)?;
+            if v.is_truthy() {
+                run_block(body, ctx)?;
+            } else if let Some(eb) = else_body {
+                run_block(eb, ctx)?;
+            }
+            Ok(())
+        }
+        Stmt::While { cond, body, line: _ } => {
+            loop {
+                let v = eval_expr(cond, ctx)?;
+                if !v.is_truthy() { break; }
+                ctx.scopes.push(HashMap::new());
+                let res = run_block(body, ctx);
+                ctx.scopes.pop();
+                match res {
+                    Ok(()) => {}
+                    Err(e) if e.code == BREAK_SIGNAL_CODE => break,
+                    Err(e) if e.code == CONTINUE_SIGNAL_CODE => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
+        Stmt::Break { line } => {
+            Err(RuntimeError::new(BREAK_SIGNAL_CODE, *line, "break"))
+        }
+        Stmt::Continue { line } => {
+            Err(RuntimeError::new(CONTINUE_SIGNAL_CODE, *line, "continue"))
+        }
+        Stmt::Try { body, rescue_var, rescue_body, line: _ } => {
+            ctx.try_depth += 1;
+            let res = run_block(body, ctx);
+            ctx.try_depth -= 1;
+            match res {
+                Ok(()) => Ok(()),
+                Err(e) if matches!(e.code, RETURN_SIGNAL_CODE | BREAK_SIGNAL_CODE | CONTINUE_SIGNAL_CODE) => Err(e),
+                Err(e) => {
+                    if let Some(name) = rescue_var {
+                        let mut err_map = std::collections::BTreeMap::new();
+                        err_map.insert("code".to_string(), Value::Int(e.code));
+                        err_map.insert("line".to_string(), Value::Int(e.line as i64));
+                        err_map.insert("message".to_string(), Value::Str(e.message));
+                        ctx.set_var(name.clone(), Value::Map(err_map));
+                    }
+                    run_block(rescue_body, ctx)
+                }
+            }
+        }
+        Stmt::Assert { cond, message, line } => {
+            let v = eval_expr(cond, ctx)?;
+            if !v.is_truthy() {
+                let msg = match message {
+                    Some(e) => eval_expr(e, ctx)?.as_str(),
+                    None => "assertion failed".to_string(),
+                };
+                return Err(RuntimeError::new(400, *line, format!("assert: {}", msg)));
             }
             Ok(())
         }
@@ -310,10 +409,9 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             let resolved = resolve_segments(segments, ctx)?;
             match stdlib::dispatch_resolved(&resolved, *line, ctx) {
                 Ok(_) => Ok(()),
-                Err(e) if e.code == RETURN_SIGNAL_CODE => Err(e),
+                Err(e) if matches!(e.code, RETURN_SIGNAL_CODE | BREAK_SIGNAL_CODE | CONTINUE_SIGNAL_CODE) => Err(e),
                 Err(e) => {
-                    if ctx.strict {
-                        // In strict mode let the top-level reporter print it once.
+                    if ctx.strict || ctx.try_depth > 0 {
                         Err(e)
                     } else {
                         ctx.report_error(e.code, e.line, &e.message);
@@ -403,6 +501,22 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
             }
         }
         Expr::Binary { op, lhs, rhs, line } => {
+            // Short-circuit `and`/`or` — don't eval rhs unless needed.
+            match op {
+                BinOp::And => {
+                    let l = eval_expr(lhs, ctx)?;
+                    if !l.is_truthy() { return Ok(Value::Bool(false)); }
+                    let r = eval_expr(rhs, ctx)?;
+                    return Ok(Value::Bool(r.is_truthy()));
+                }
+                BinOp::Or => {
+                    let l = eval_expr(lhs, ctx)?;
+                    if l.is_truthy() { return Ok(Value::Bool(true)); }
+                    let r = eval_expr(rhs, ctx)?;
+                    return Ok(Value::Bool(r.is_truthy()));
+                }
+                _ => {}
+            }
             let l = eval_expr(lhs, ctx)?;
             let r = eval_expr(rhs, ctx)?;
             eval_binary(*op, &l, &r, *line)
@@ -411,19 +525,99 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
             let v = eval_expr(expr, ctx)?;
             eval_unary(*op, &v, *line)
         }
+        Expr::MapLit { entries, line } => {
+            let mut map = std::collections::BTreeMap::new();
+            for (kex, vex) in entries {
+                let k = eval_expr(kex, ctx)?.as_str();
+                let v = eval_expr(vex, ctx)?;
+                map.insert(k, v);
+            }
+            let _ = line;
+            Ok(Value::Map(map))
+        }
+        Expr::Index { target, key, line } => {
+            let t = eval_expr(target, ctx)?;
+            let k = eval_expr(key, ctx)?;
+            match (&t, &k) {
+                (Value::List(items), Value::Int(i)) => {
+                    let n = items.len() as i64;
+                    let idx = if *i < 0 { *i + n } else { *i };
+                    items.get(idx as usize).cloned()
+                        .ok_or_else(|| RuntimeError::new(404, *line, format!("list index out of range: {}", i)))
+                }
+                (Value::Map(m), _) => {
+                    let key_str = k.as_str();
+                    Ok(m.get(&key_str).cloned().unwrap_or(Value::Nil))
+                }
+                (Value::Str(s), Value::Int(i)) => {
+                    let chars: Vec<char> = s.chars().collect();
+                    let n = chars.len() as i64;
+                    let idx = if *i < 0 { *i + n } else { *i };
+                    chars.get(idx as usize).map(|c| Value::Str(c.to_string()))
+                        .ok_or_else(|| RuntimeError::new(404, *line, format!("string index out of range: {}", i)))
+                }
+                _ => Err(RuntimeError::new(400, *line, format!("cannot index {:?} by {:?}", t, k))),
+            }
+        }
+    }
+}
+
+pub fn values_equal_pub(l: &Value, r: &Value) -> bool { values_equal(l, r) }
+
+fn values_equal(l: &Value, r: &Value) -> bool {
+    match (l, r) {
+        (Value::Nil, Value::Nil) => true,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Str(a), Value::Str(b)) => a == b,
+        (Value::Int(a), Value::Int(b)) => a == b,
+        (Value::Float(a), Value::Float(b)) => a == b,
+        (Value::Int(a), Value::Float(b)) | (Value::Float(b), Value::Int(a)) => *a as f64 == *b,
+        (Value::List(a), Value::List(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(x, y))
+        }
+        (Value::Map(a), Value::Map(b)) => {
+            a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).map_or(false, |w| values_equal(v, w)))
+        }
+        _ => false,
     }
 }
 
 fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, RuntimeError> {
+    // Short-circuit logical ops first; these don't coerce to numbers.
+    match op {
+        BinOp::And => return Ok(Value::Bool(l.is_truthy() && r.is_truthy())),
+        BinOp::Or  => return Ok(Value::Bool(l.is_truthy() || r.is_truthy())),
+        BinOp::Eq  => return Ok(Value::Bool(values_equal(l, r))),
+        BinOp::Ne  => return Ok(Value::Bool(!values_equal(l, r))),
+        _ => {}
+    }
+
     if matches!(op, BinOp::Add) {
         if let (Value::Str(a), Value::Str(b)) = (l, r) {
             return Ok(Value::Str(format!("{}{}", a, b)));
+        }
+    }
+    if matches!(op, BinOp::Add) {
+        if let (Value::List(a), Value::List(b)) = (l, r) {
+            let mut joined = a.clone();
+            joined.extend(b.iter().cloned());
+            return Ok(Value::List(joined));
         }
     }
 
     let lf = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {:?} as number", l)))?;
     let rf = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {:?} as number", r)))?;
     let both_int = matches!((l, r), (Value::Int(_), Value::Int(_)));
+
+    if matches!(op, BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge) {
+        return Ok(Value::Bool(match op {
+            BinOp::Lt => lf < rf,
+            BinOp::Gt => lf > rf,
+            BinOp::Le => lf <= rf,
+            BinOp::Ge => lf >= rf,
+            _ => unreachable!(),
+        }));
+    }
 
     let result = match op {
         BinOp::Add => lf + rf,
@@ -438,6 +632,7 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, Ru
             lf.rem_euclid(rf)
         }
         BinOp::Pow => lf.powf(rf),
+        _ => unreachable!(),
     };
 
     let stay_int = both_int && !matches!(op, BinOp::Div | BinOp::Pow) && result == result.trunc();
@@ -458,6 +653,7 @@ fn eval_unary(op: UnaryOp, v: &Value, line: usize) -> Result<Value, RuntimeError
                 Ok(Value::Float(-f))
             }
         }
+        UnaryOp::Not => Ok(Value::Bool(!v.is_truthy())),
     }
 }
 

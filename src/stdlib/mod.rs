@@ -1,12 +1,17 @@
 pub mod ai;
 pub mod ascii;
 pub mod bash;
+pub mod collections;
 pub mod drivers;
+pub mod http;
+pub mod io;
+pub mod json;
 pub mod logging;
 pub mod math;
 pub mod native;
 pub mod os;
 pub mod system;
+pub mod time;
 pub mod web;
 pub mod webdriver;
 
@@ -47,6 +52,18 @@ const KNOWN: &[&str] = &[
     // logging
     "log", "log_debug", "log_info", "log_warn", "log_error",
     "log_level", "log_to", "log_history", "log_filter", "log_count", "log_clear",
+    // collections (string/list/map)
+    "len", "split", "join", "contains", "slice", "append", "pop",
+    "sorted", "reverse", "upper", "lower", "trim", "replace",
+    "map_keys", "map_values", "map_set", "dict",
+    // io
+    "input",
+    // time
+    "now", "now_ms", "sleep_ms", "format_time",
+    // json
+    "json_parse", "json_stringify",
+    // http
+    "http_get", "http_post",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -265,6 +282,42 @@ pub fn dispatch(
         "log_filter"  => logging::log_filter(positional, line, ctx),
         "log_count"   => logging::log_count(positional, line, ctx),
         "log_clear"   => logging::log_clear(positional, line, ctx),
+
+        // ---- collections ----
+        "len"        => collections::len(positional, line, ctx),
+        "split"      => collections::split(positional, line, ctx),
+        "join"       => collections::join(positional, line, ctx),
+        "contains"   => collections::contains(positional, line, ctx),
+        "slice"      => collections::slice(positional, line, ctx),
+        "append"     => collections::append(positional, line, ctx),
+        "pop"        => collections::pop(positional, line, ctx),
+        "sorted"     => collections::sorted(positional, line, ctx),
+        "reverse"    => collections::reverse(positional, line, ctx),
+        "upper"      => collections::upper(positional, line, ctx),
+        "lower"      => collections::lower(positional, line, ctx),
+        "trim"       => collections::trim(positional, line, ctx),
+        "replace"    => collections::replace(positional, line, ctx),
+        "map_keys"   => collections::map_keys(positional, line, ctx),
+        "map_values" => collections::map_values(positional, line, ctx),
+        "map_set"    => collections::map_set(positional, line, ctx),
+        "dict"       => collections::dict(positional, line, ctx),
+
+        // ---- io ----
+        "input"      => io::input(positional, line, ctx),
+
+        // ---- time ----
+        "now"         => time::now(positional, line, ctx),
+        "now_ms"      => time::now_ms(positional, line, ctx),
+        "sleep_ms"    => time::sleep_ms(positional, line, ctx),
+        "format_time" => time::format_time(positional, line, ctx),
+
+        // ---- json ----
+        "json_parse"     => json::json_parse(positional, line, ctx),
+        "json_stringify" => json::json_stringify(positional, line, ctx),
+
+        // ---- http ----
+        "http_get"  => http::http_get(positional, line, ctx),
+        "http_post" => http::http_post(positional, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{}`", other))),
     }

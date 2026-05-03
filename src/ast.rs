@@ -21,6 +21,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     List(Vec<Value>),
+    Map(BTreeMap<String, Value>),
     Nil,
 }
 
@@ -41,6 +42,12 @@ impl Value {
             Value::List(items) => {
                 let parts: Vec<String> = items.iter().map(|v| v.as_str()).collect();
                 parts.join(", ")
+            }
+            Value::Map(items) => {
+                let parts: Vec<String> = items.iter()
+                    .map(|(k, v)| format!("{:?}: {}", k, v.as_str()))
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
             }
         }
     }
@@ -63,15 +70,20 @@ impl Value {
             Value::Float(f) => *f != 0.0 && !f.is_nan(),
             Value::Str(s) => !s.is_empty(),
             Value::List(items) => !items.is_empty(),
+            Value::Map(m) => !m.is_empty(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum BinOp { Add, Sub, Mul, Div, Mod, Pow }
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BinOp {
+    Add, Sub, Mul, Div, Mod, Pow,
+    Eq, Ne, Lt, Gt, Le, Ge,
+    And, Or,
+}
 
 #[derive(Debug, Clone, Copy)]
-pub enum UnaryOp { Neg }
+pub enum UnaryOp { Neg, Not }
 
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -96,6 +108,17 @@ pub enum Expr {
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
+        line: usize,
+    },
+    /// `{"key": value, ...}` — map literal
+    MapLit {
+        entries: Vec<(Expr, Expr)>,
+        line: usize,
+    },
+    /// `coll[key]` — indexing into list (int) or map (string)
+    Index {
+        target: Box<Expr>,
+        key: Box<Expr>,
         line: usize,
     },
 }
@@ -124,13 +147,41 @@ pub enum Stmt {
         expr: Expr,
         line: usize,
     },
-    /// Old form: `if linux:` / `if windows:` / `if macos:` / new: `if not linux:` /
-    /// optionally followed by `else:`
+    /// Legacy OS check: `if linux:` / `if not macos:` / optional `else:`.
     IfOs {
         os: String,
         negate: bool,
         body: Vec<Stmt>,
         else_body: Option<Vec<Stmt>>,
+        line: usize,
+    },
+    /// General-purpose conditional: `if <expr>:` ... `else:`.
+    If {
+        cond: Expr,
+        body: Vec<Stmt>,
+        else_body: Option<Vec<Stmt>>,
+        line: usize,
+    },
+    /// `while <expr>:` block.
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+        line: usize,
+    },
+    /// `break` / `continue` inside loops.
+    Break { line: usize },
+    Continue { line: usize },
+    /// `try: ... rescue [name]: ...` — catch a runtime error and bind it to a var.
+    Try {
+        body: Vec<Stmt>,
+        rescue_var: Option<String>,
+        rescue_body: Vec<Stmt>,
+        line: usize,
+    },
+    /// `assert(<expr> [, "message"])` — abort if expr is falsy.
+    Assert {
+        cond: Expr,
+        message: Option<Expr>,
         line: usize,
     },
     /// `for x in <expr>:`
