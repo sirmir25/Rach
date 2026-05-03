@@ -19,9 +19,9 @@ const KNOWN: &[&str] = &[
     // print / convenience
     "print", "echo",
     // short aliases (resolve to longer canonical names below)
-    "os", "read", "write", "exists", "del", "run", "sh", "rm",
+    "read", "write", "exists", "del", "run", "sh", "rm",
     // system / os
-    "detect_os", "reboot", "shutdown",
+    "reboot", "shutdown",
     "run_command", "install_package",
     "create_file", "read_file", "edit_file", "delete_file", "check_if_exists",
     // web / browser
@@ -159,7 +159,6 @@ pub fn dispatch(
     // Short aliases — rewritten to canonical names so the rest of the
     // dispatcher stays a single match statement.
     let canonical: &str = match name {
-        "os" => "detect_os",
         "read" => "read_file",
         "write" => "create_file",
         "exists" => "check_if_exists",
@@ -178,7 +177,6 @@ pub fn dispatch(
         }
 
         // ---- system / os ----
-        "detect_os" => os::detect_os(line, ctx),
         "reboot" => system::reboot(line),
         "shutdown" => system::shutdown(line),
         "run_command" => system::run_command(positional, line),

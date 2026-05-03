@@ -1,4 +1,3 @@
-import os
 import system
 import ascii
 
@@ -9,11 +8,7 @@ return(end)
 (end0)
 
 rach main(0)
-    detect os()
-
-    # Variables: capture command output
-    set os_name = detect_os()
-    create_file("/tmp/rach_new.txt", os_name)
+    create_file("/tmp/rach_new.txt", "demo")
 
     # if/else
     if linux:

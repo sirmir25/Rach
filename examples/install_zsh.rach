@@ -1,10 +1,8 @@
 import system
-import os
 import bash
 import ai
 
 rach main(0)
-    detect os()
     if linux:
         bash = generate install oh my zsh
         ai_generate(language="bash", task="установить oh-my-zsh на Linux")

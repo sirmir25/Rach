@@ -1,8 +1,6 @@
 import system
-import os
 
 rach main(0)
-    detect os()
     create_file("/tmp/rach_hello.txt", "hello from Rach!")
     read_file("/tmp/rach_hello.txt")
     check_if_exists("/tmp/rach_hello.txt")

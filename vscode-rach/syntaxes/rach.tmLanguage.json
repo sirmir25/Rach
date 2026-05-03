@@ -46,7 +46,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.rach",
-          "match": "\\b(detect_os|reboot|shutdown|run_command|install_package|create_file|read_file|edit_file|delete_file|check_if_exists|open_in_browser|open_in_chrome|open_in_firefox|open_in_edge|open_in_safari|navigate_to|open_new_tab|switch_tab|wait_seconds|scroll_down_pixels|take_screenshot|press_key|click_button|click_element|type_text|fill_form|login|execute_js|download_file|upload_file|ascii_banner|ascii_box|ascii_pyramid|ascii_diamond|ascii_border|ascii_mirror|ascii_table)\\b"
+          "match": "\\b(reboot|shutdown|run_command|install_package|create_file|read_file|edit_file|delete_file|check_if_exists|open_in_browser|open_in_chrome|open_in_firefox|open_in_edge|open_in_safari|navigate_to|open_new_tab|switch_tab|wait_seconds|scroll_down_pixels|take_screenshot|press_key|click_button|click_element|type_text|fill_form|login|execute_js|download_file|upload_file|ascii_banner|ascii_box|ascii_pyramid|ascii_diamond|ascii_border|ascii_mirror|ascii_table)\\b"
         },
         {
           "name": "support.function.builtin.spaced.rach",

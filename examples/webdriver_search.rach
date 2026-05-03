@@ -6,10 +6,8 @@
 
 import web
 import browser
-import os
 
 rach main(0)
-    detect os()
     open in browser("https://duckduckgo.com/")
     wait seconds(2)
     fill form id("searchbox_input") value("Rust language")

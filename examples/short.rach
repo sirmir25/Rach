@@ -1,9 +1,8 @@
 # No boilerplate. Top-level statements run in order.
-# Short aliases mirror Unix utilities: os, read, write, exists, del, run, sh, rm.
+# Short aliases mirror Unix utilities: read, write, exists, del, run, sh, rm.
 
 print("hello, rach")
 
-os()
 write("/tmp/r.txt", "data")
 read("/tmp/r.txt")
 exists("/tmp/r.txt")

@@ -87,11 +87,9 @@ Run: `rach hello.rach`.
 The longer "wrapped" form is still supported for back-compat and is necessary when you want helper functions:
 
 ```
-import os
 import system
 
 rach main(0)
-    detect os()
     create_file("/tmp/hello.txt", "hello from Rach")
     completed
 return(end)
@@ -123,7 +121,7 @@ Imports are declarative. They don't load code (the standard library is always co
 
 | Module       | What it declares                                  |
 |--------------|---------------------------------------------------|
-| `os`         | `detect_os`, `if linux/macos/windows` checks      |
+| `os`         | `if linux/macos/windows` checks                   |
 | `system`     | files, `run_command`, `install_package`, `reboot` |
 | `web`        | browser automation                                |
 | `browser`    | alias for `web` (semantic alias)                  |
@@ -141,7 +139,6 @@ Imports are declarative. They don't load code (the standard library is always co
 `set NAME = <expr>` captures a value. Right-hand side can be a literal, a list, a command call, or another variable.
 
 ```
-set os_name = detect_os()
 set message = read_file("/tmp/notes.txt")
 set urls = ["https://a", "https://b", "https://c"]
 ```
@@ -216,7 +213,6 @@ The most common stdlib commands have one-word aliases — pick whichever feels s
 
 | Short          | Canonical                |
 |----------------|--------------------------|
-| `os()`         | `detect_os()`            |
 | `read(path)`   | `read_file(path)`        |
 | `write(p, c)`  | `create_file(p, c)`      |
 | `exists(path)` | `check_if_exists(path)`  |
@@ -224,11 +220,10 @@ The most common stdlib commands have one-word aliases — pick whichever feels s
 | `run(cmd)` / `sh(cmd)`   | `run_command(cmd)`  |
 | `print(x)` / `echo(x)`   | line print to stdout |
 
-### os / system
+### system
 
 | Command                  | What it does                                                    |
 |--------------------------|------------------------------------------------------------------|
-| `detect os()`            | Prints the current OS: `linux`, `macos`, `windows`, `bsd`       |
 | `reboot()`               | Prints reboot intent (without executing — for safety)           |
 | `shutdown()`             | Same, no execution                                              |
 
@@ -384,7 +379,6 @@ The only conditional operator — an OS check:
 
 ```
 rach main(0)
-    detect os()
     if linux:
         run_command("apt-get update")
     if macos:

@@ -1,9 +1,7 @@
 import web
 import browser
-import os
 
 rach main(0)
-    detect os()
     open in browser("https://github.com/")
     wait seconds(2)
     login user("ilia") pws("hunter2")
