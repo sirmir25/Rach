@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{BashAction, BinOp, CallSegment, Expr, Function, Program, Stmt, UnaryOp, Value};
 use crate::stdlib;
+use crate::stdlib::logging::LogState;
 use crate::stdlib::webdriver::Session;
 use crate::stdlib::ResolvedSegment;
 
@@ -38,6 +39,8 @@ pub struct Ctx {
     pub source: String,
     /// Path of the running script, shown in error headers.
     pub script_path: String,
+    /// Logging state — level, ring buffer, and optional file mirror.
+    pub log: LogState,
 }
 
 impl Ctx {
@@ -161,6 +164,7 @@ pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
         capturing: false,
         source,
         script_path,
+        log: LogState::default(),
     }
 }
 
@@ -218,6 +222,7 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
         capturing: false,
         source: source.to_string(),
         script_path: script_path.to_string(),
+        log: LogState::default(),
     };
 
     let main = ctx.functions.get("main").cloned()

@@ -2,6 +2,7 @@ pub mod ai;
 pub mod ascii;
 pub mod bash;
 pub mod drivers;
+pub mod logging;
 pub mod math;
 pub mod native;
 pub mod os;
@@ -43,6 +44,9 @@ const KNOWN: &[&str] = &[
     "abs", "floor", "ceil", "round",
     "min", "max", "sum", "avg",
     "radians", "degrees", "pi", "e",
+    // logging
+    "log", "log_debug", "log_info", "log_warn", "log_error",
+    "log_level", "log_to", "log_history", "log_filter", "log_count", "log_clear",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -250,6 +254,19 @@ pub fn dispatch(
         "degrees" => math::degrees(positional, line, ctx),
         "pi"      => math::pi(positional, line, ctx),
         "e"       => math::e_const(positional, line, ctx),
+
+        // ---- logging ----
+        "log"         => logging::log(positional, line, ctx),
+        "log_debug"   => logging::log_debug(positional, line, ctx),
+        "log_info"    => logging::log_info(positional, line, ctx),
+        "log_warn"    => logging::log_warn(positional, line, ctx),
+        "log_error"   => logging::log_error(positional, line, ctx),
+        "log_level"   => logging::log_level(positional, line, ctx),
+        "log_to"      => logging::log_to(positional, line, ctx),
+        "log_history" => logging::log_history(positional, line, ctx),
+        "log_filter"  => logging::log_filter(positional, line, ctx),
+        "log_count"   => logging::log_count(positional, line, ctx),
+        "log_clear"   => logging::log_clear(positional, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{}`", other))),
     }
