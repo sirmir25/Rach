@@ -1,7 +1,10 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tok {
     Word(String),
-    Str(String),
+    /// String literal — stored as a sequence of parts. Pure-literal strings end
+    /// up as a single `StrPart::Lit`. `{expr}` inside the source produces an
+    /// `Expr` part; `\{` writes a literal `{`.
+    Str(Vec<StrPart>),
     Int(i64),
     Float(f64),
     LParen,
@@ -13,6 +16,8 @@ pub enum Tok {
     Comma,
     Equals,
     Colon,
+    Semicolon,
+    Dot,
     Newline,
     Plus,
     Minus,
@@ -26,6 +31,32 @@ pub enum Tok {
     Gt,
     LtEq,
     GtEq,
+    LtLt,
+    GtGt,
+    PlusEq,
+    MinusEq,
+    StarEq,
+    SlashEq,
+    PercentEq,
+    PlusPlus,
+    MinusMinus,
+    Question,
+    Amp,
+    Pipe,
+    Tilde,
+    CaretCaret,
+    ColonColon,
+    Arrow,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StrPart {
+    /// Literal text (already unescaped).
+    Lit(String),
+    /// Raw source for an interpolated expression (e.g. `name + 1`).
+    /// We store the raw text and re-tokenize it later — that keeps the
+    /// lexer state machine simple.
+    Expr(String),
 }
 
 #[derive(Debug, Clone)]
@@ -86,13 +117,56 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
         if c == '{' { push(&mut tokens, Tok::LBrace, line, tok_col); i += 1; col += 1; continue; }
         if c == '}' { push(&mut tokens, Tok::RBrace, line, tok_col); i += 1; col += 1; continue; }
         if c == ',' { push(&mut tokens, Tok::Comma,  line, tok_col); i += 1; col += 1; continue; }
-        if c == ':' { push(&mut tokens, Tok::Colon,  line, tok_col); i += 1; col += 1; continue; }
-        if c == '+' { push(&mut tokens, Tok::Plus,   line, tok_col); i += 1; col += 1; continue; }
-        if c == '-' { push(&mut tokens, Tok::Minus,  line, tok_col); i += 1; col += 1; continue; }
-        if c == '*' { push(&mut tokens, Tok::Star,   line, tok_col); i += 1; col += 1; continue; }
-        if c == '/' { push(&mut tokens, Tok::Slash,  line, tok_col); i += 1; col += 1; continue; }
+        if c == ';' { push(&mut tokens, Tok::Semicolon, line, tok_col); i += 1; col += 1; continue; }
+        if c == '.' { push(&mut tokens, Tok::Dot, line, tok_col); i += 1; col += 1; continue; }
+        if c == '?' { push(&mut tokens, Tok::Question, line, tok_col); i += 1; col += 1; continue; }
+        if c == '~' { push(&mut tokens, Tok::Tilde, line, tok_col); i += 1; col += 1; continue; }
+        if c == '&' { push(&mut tokens, Tok::Amp, line, tok_col); i += 1; col += 1; continue; }
+        if c == '|' { push(&mut tokens, Tok::Pipe, line, tok_col); i += 1; col += 1; continue; }
+
+        if c == ':' && i + 1 < chars.len() && chars[i + 1] == ':' {
+            push(&mut tokens, Tok::ColonColon, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == ':' { push(&mut tokens, Tok::Colon, line, tok_col); i += 1; col += 1; continue; }
+
+        if c == '+' && i + 1 < chars.len() && chars[i + 1] == '+' {
+            push(&mut tokens, Tok::PlusPlus, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '+' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            push(&mut tokens, Tok::PlusEq, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '+' { push(&mut tokens, Tok::Plus, line, tok_col); i += 1; col += 1; continue; }
+
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
+            push(&mut tokens, Tok::MinusMinus, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            push(&mut tokens, Tok::MinusEq, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '>' {
+            push(&mut tokens, Tok::Arrow, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '-' { push(&mut tokens, Tok::Minus, line, tok_col); i += 1; col += 1; continue; }
+
+        if c == '*' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            push(&mut tokens, Tok::StarEq, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '*' { push(&mut tokens, Tok::Star, line, tok_col); i += 1; col += 1; continue; }
+
+        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            push(&mut tokens, Tok::SlashEq, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '/' { push(&mut tokens, Tok::Slash, line, tok_col); i += 1; col += 1; continue; }
+
+        if c == '%' && i + 1 < chars.len() && chars[i + 1] == '=' {
+            push(&mut tokens, Tok::PercentEq, line, tok_col); i += 2; col += 2; continue;
+        }
         if c == '%' { push(&mut tokens, Tok::Percent, line, tok_col); i += 1; col += 1; continue; }
-        if c == '^' { push(&mut tokens, Tok::Caret,  line, tok_col); i += 1; col += 1; continue; }
+
+        if c == '^' && i + 1 < chars.len() && chars[i + 1] == '^' {
+            push(&mut tokens, Tok::CaretCaret, line, tok_col); i += 2; col += 2; continue;
+        }
+        if c == '^' { push(&mut tokens, Tok::Caret, line, tok_col); i += 1; col += 1; continue; }
 
         if c == '=' && i + 1 < chars.len() && chars[i + 1] == '=' {
             push(&mut tokens, Tok::EqEq, line, tok_col); i += 2; col += 2; continue;
@@ -103,11 +177,17 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
             push(&mut tokens, Tok::BangEq, line, tok_col); i += 2; col += 2; continue;
         }
 
+        if c == '<' && i + 1 < chars.len() && chars[i + 1] == '<' {
+            push(&mut tokens, Tok::LtLt, line, tok_col); i += 2; col += 2; continue;
+        }
         if c == '<' && i + 1 < chars.len() && chars[i + 1] == '=' {
             push(&mut tokens, Tok::LtEq, line, tok_col); i += 2; col += 2; continue;
         }
         if c == '<' { push(&mut tokens, Tok::Lt, line, tok_col); i += 1; col += 1; continue; }
 
+        if c == '>' && i + 1 < chars.len() && chars[i + 1] == '>' {
+            push(&mut tokens, Tok::GtGt, line, tok_col); i += 2; col += 2; continue;
+        }
         if c == '>' && i + 1 < chars.len() && chars[i + 1] == '=' {
             push(&mut tokens, Tok::GtEq, line, tok_col); i += 2; col += 2; continue;
         }
@@ -118,19 +198,44 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
             let start_col = tok_col;
             i += 1;
             col += 1;
-            let mut s = String::new();
+            let mut parts: Vec<StrPart> = Vec::new();
+            let mut buf = String::new();
             while i < chars.len() && chars[i] != '"' {
                 if chars[i] == '\\' && i + 1 < chars.len() {
                     match chars[i + 1] {
-                        'n' => s.push('\n'),
-                        't' => s.push('\t'),
-                        'r' => s.push('\r'),
-                        '\\' => s.push('\\'),
-                        '"' => s.push('"'),
-                        other => { s.push('\\'); s.push(other); }
+                        'n' => buf.push('\n'),
+                        't' => buf.push('\t'),
+                        'r' => buf.push('\r'),
+                        '\\' => buf.push('\\'),
+                        '"' => buf.push('"'),
+                        '{' => buf.push('{'),
+                        '}' => buf.push('}'),
+                        other => { buf.push('\\'); buf.push(other); }
                     }
                     i += 2;
                     col += 2;
+                    continue;
+                }
+                if chars[i] == '{' {
+                    if !buf.is_empty() { parts.push(StrPart::Lit(std::mem::take(&mut buf))); }
+                    i += 1;
+                    col += 1;
+                    let mut depth = 1usize;
+                    let mut expr = String::new();
+                    while i < chars.len() && depth > 0 {
+                        let ch = chars[i];
+                        if ch == '{' { depth += 1; }
+                        if ch == '}' { depth -= 1; if depth == 0 { break; } }
+                        if ch == '\n' { line += 1; col = 1; } else { col += 1; }
+                        expr.push(ch);
+                        i += 1;
+                    }
+                    if i >= chars.len() {
+                        return Err(LexError { line: start_line, message: "unterminated `{...}` in string".into() });
+                    }
+                    i += 1; // consume `}`
+                    col += 1;
+                    parts.push(StrPart::Expr(expr));
                     continue;
                 }
                 if chars[i] == '\n' {
@@ -139,7 +244,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
                 } else {
                     col += 1;
                 }
-                s.push(chars[i]);
+                buf.push(chars[i]);
                 i += 1;
             }
             if i >= chars.len() {
@@ -147,7 +252,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
             }
             i += 1;
             col += 1;
-            tokens.push(Token { tok: Tok::Str(s), line: start_line, col: start_col });
+            if !buf.is_empty() || parts.is_empty() {
+                parts.push(StrPart::Lit(buf));
+            }
+            tokens.push(Token { tok: Tok::Str(parts), line: start_line, col: start_col });
             continue;
         }
 

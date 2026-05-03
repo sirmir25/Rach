@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
-use crate::ast::{BashAction, BinOp, CallSegment, Expr, Function, Program, Stmt, UnaryOp, Value};
-use crate::lexer::{Tok, Token};
+use crate::ast::{
+    AssignTarget, BashAction, BinOp, CallSegment, Expr, Function, InterpPart, Program, Stmt,
+    StructDef, UnaryOp, Value,
+};
+use crate::lexer::{StrPart, Tok, Token};
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -31,13 +34,13 @@ impl P {
         t
     }
     fn skip_newlines(&mut self) {
-        while matches!(self.peek().map(|t| &t.tok), Some(Tok::Newline)) {
+        while matches!(self.peek().map(|t| &t.tok), Some(Tok::Newline) | Some(Tok::Semicolon)) {
             self.pos += 1;
         }
     }
     fn expect_newline(&mut self) -> Result<(), ParseError> {
         match self.peek().map(|t| &t.tok) {
-            Some(Tok::Newline) => { self.pos += 1; Ok(()) }
+            Some(Tok::Newline) | Some(Tok::Semicolon) => { self.pos += 1; Ok(()) }
             None => Ok(()),
             _ => Err(ParseError::at(self.peek(), "expected end of line")),
         }
@@ -65,6 +68,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
     let mut p = P::new(tokens);
     let mut imports = Vec::new();
     let mut functions = Vec::new();
+    let mut structs: Vec<StructDef> = Vec::new();
 
     p.skip_newlines();
 
@@ -86,59 +90,64 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
         break;
     }
 
-    // Two top-level forms accepted:
-    //
-    //   1. Legacy "wrapped":   `rach main(0) ... return(end) (end0)` blocks. Multiple
-    //      functions (main + helpers) all use this form.
-    //
-    //   2. Top-level script:   bare statements at the file root. The parser
-    //      synthesises a `main(0)` wrapper around them. Helper functions can
-    //      still be declared after the implicit main body using `rach name(...)`.
-    let starts_with_function = matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(w)) if w == "rach");
+    // Top-level: `rach name(...)` defs, `struct` defs, or bare statements
+    // (which get wrapped into an implicit `main`).
+    let starts_with_def = matches!(
+        p.peek().map(|t| t.tok.clone()),
+        Some(Tok::Word(ref w)) if w == "rach" || w == "struct"
+    );
 
-    if starts_with_function {
-        while let Some(tok) = p.peek().cloned() {
+    if starts_with_def {
+        loop {
+            p.skip_newlines();
+            let tok = match p.peek() { Some(t) => t.clone(), None => break };
             match &tok.tok {
                 Tok::Word(w) if w == "rach" => {
                     let f = parse_function(&mut p)?;
                     functions.push(f);
-                    p.skip_newlines();
                 }
-                _ => return Err(ParseError::at(Some(&tok), format!("expected `rach` or `import`, got `{:?}`", tok.tok))),
+                Tok::Word(w) if w == "struct" => {
+                    let s = parse_struct(&mut p)?;
+                    structs.push(s);
+                }
+                _ => return Err(ParseError::at(Some(&tok), format!("expected `rach`, `struct`, or `import`, got `{:?}`", tok.tok))),
             }
         }
     } else {
-        // Synthesised main: collect top-level stmts until EOF or until we hit
-        // a `rach <name>(...)` declaration of a helper.
         let mut main_body: Vec<Stmt> = Vec::new();
         let main_line = p.peek().map(|t| t.line).unwrap_or(1);
         loop {
             p.skip_newlines();
             let tok = match p.peek() { Some(t) => t.clone(), None => break };
-            if matches!(&tok.tok, Tok::Word(w) if w == "rach") { break; }
+            if matches!(&tok.tok, Tok::Word(w) if w == "rach" || w == "struct") { break; }
             let stmt = parse_stmt(&mut p)?;
             main_body.push(stmt);
         }
         functions.push(Function {
             name: "main".to_string(),
             params: Vec::new(),
+            defaults: Vec::new(),
             body: main_body,
             line: main_line,
         });
-        // Any trailing helper functions
-        while let Some(tok) = p.peek().cloned() {
+        loop {
+            p.skip_newlines();
+            let tok = match p.peek() { Some(t) => t.clone(), None => break };
             match &tok.tok {
                 Tok::Word(w) if w == "rach" => {
                     let f = parse_function(&mut p)?;
                     functions.push(f);
-                    p.skip_newlines();
                 }
-                _ => return Err(ParseError::at(Some(&tok), format!("expected `rach` or end of file, got `{:?}`", tok.tok))),
+                Tok::Word(w) if w == "struct" => {
+                    let s = parse_struct(&mut p)?;
+                    structs.push(s);
+                }
+                _ => return Err(ParseError::at(Some(&tok), format!("expected `rach`, `struct`, or end of file, got `{:?}`", tok.tok))),
             }
         }
     }
 
-    Ok(Program { imports, functions })
+    Ok(Program { imports, functions, structs })
 }
 
 fn expect_end_marker(p: &mut P) -> Result<(), ParseError> {
@@ -147,6 +156,28 @@ fn expect_end_marker(p: &mut P) -> Result<(), ParseError> {
         Tok::Word(w) if w == "end" || (w.starts_with("end") && w[3..].chars().all(|c| c.is_ascii_digit())) => Ok(()),
         _ => Err(ParseError::at(Some(&tok), "expected `end`")),
     }
+}
+
+fn parse_struct(p: &mut P) -> Result<StructDef, ParseError> {
+    let header = p.expect_word("struct")?;
+    let name_tok = p.next().ok_or_else(|| ParseError::at(Some(&header), "expected struct name"))?;
+    let name = match name_tok.tok {
+        Tok::Word(s) => s,
+        _ => return Err(ParseError::at(Some(&name_tok), "expected struct name")),
+    };
+    p.expect_tok(&Tok::LBrace, "`{`")?;
+    let mut fields: Vec<String> = Vec::new();
+    loop {
+        p.skip_newlines();
+        match p.peek().map(|t| t.tok.clone()) {
+            Some(Tok::RBrace) => { p.next(); break; }
+            Some(Tok::Comma) => { p.next(); continue; }
+            Some(Tok::Word(f)) => { p.next(); fields.push(f); }
+            _ => return Err(ParseError::at(p.peek(), "expected field name or `}`")),
+        }
+    }
+    p.expect_newline()?;
+    Ok(StructDef { name, fields, line: header.line })
 }
 
 fn parse_function(p: &mut P) -> Result<Function, ParseError> {
@@ -158,15 +189,12 @@ fn parse_function(p: &mut P) -> Result<Function, ParseError> {
     };
     p.expect_tok(&Tok::LParen, "`(`")?;
 
-    // Two forms inside the parens:
-    //   `rach main(0)`            — legacy arity (an integer); produces no named params
-    //   `rach myfn(a, b)`         — named params (zero or more identifiers)
-    //   `rach myfn()`             — empty
     let mut params: Vec<String> = Vec::new();
+    let mut defaults: Vec<Option<Expr>> = Vec::new();
     match p.peek().map(|t| t.tok.clone()) {
         Some(Tok::RParen) => { p.next(); }
         Some(Tok::Int(_)) => {
-            p.next(); // discard legacy arity
+            p.next();
             p.expect_tok(&Tok::RParen, "`)`")?;
         }
         Some(Tok::Word(_)) => {
@@ -175,6 +203,13 @@ fn parse_function(p: &mut P) -> Result<Function, ParseError> {
                 match pt.tok {
                     Tok::Word(s) => params.push(s),
                     _ => return Err(ParseError::at(Some(&pt), "expected param name")),
+                }
+                // C++ default param: `name = expr`
+                if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Equals)) {
+                    p.next();
+                    defaults.push(Some(parse_expr(p)?));
+                } else {
+                    defaults.push(None);
                 }
                 match p.peek().map(|t| t.tok.clone()) {
                     Some(Tok::Comma) => { p.next(); }
@@ -186,12 +221,29 @@ fn parse_function(p: &mut P) -> Result<Function, ParseError> {
         _ => return Err(ParseError::at(p.peek(), "expected params or arity")),
     }
 
+    // Two body forms:
+    //   (a) clean:   `rach name(...):`  ... `end`     (newline)
+    //   (b) legacy:  `rach name(...)`   ... `return(end)` `(end0)`
+    let clean_form = matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Colon));
+
+    if clean_form {
+        p.next(); // `:`
+        p.expect_newline()?;
+        let body = parse_block(p, 0)?;
+        let end_tok = p.next().ok_or_else(|| ParseError::at(None, "expected `end` to close function"))?;
+        match &end_tok.tok {
+            Tok::Word(w) if w == "end" => {}
+            _ => return Err(ParseError::at(Some(&end_tok), "expected `end` to close function")),
+        }
+        let _ = p.expect_newline();
+        return Ok(Function { name, params, defaults, body, line: header.line });
+    }
+
     p.expect_newline()?;
     p.skip_newlines();
 
     let body = parse_block(p, 0)?;
 
-    // `return(end)` — function-end marker (NOT the same as `return <expr>`)
     p.expect_word("return")?;
     p.expect_tok(&Tok::LParen, "`(`")?;
     expect_end_marker(p)?;
@@ -207,7 +259,7 @@ fn parse_function(p: &mut P) -> Result<Function, ParseError> {
     p.expect_tok(&Tok::RParen, "`)`")?;
     p.expect_newline()?;
 
-    Ok(Function { name, params, body, line: header.line })
+    Ok(Function { name, params, defaults, body, line: header.line })
 }
 
 fn parse_block(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError> {
@@ -219,7 +271,7 @@ fn parse_block(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError
             None => break,
         };
 
-        // Function-end marker `return(end)` — only at function level (min_indent=0)
+        // Function-end markers (legacy and clean form).
         if min_indent_col == 0 {
             if matches!(&tok.tok, Tok::Word(w) if w == "return") {
                 if let Some(Tok::LParen) = p.peek_at(1).map(|t| t.tok.clone()) {
@@ -230,6 +282,9 @@ fn parse_block(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError
                     }
                 }
             }
+            if matches!(&tok.tok, Tok::Word(w) if w == "end") {
+                break;
+            }
         }
         if matches!(&tok.tok, Tok::LParen) { break; }
 
@@ -237,7 +292,7 @@ fn parse_block(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError
             break;
         }
 
-        // `else:` and `rescue` mark the boundaries of their parent if/try blocks.
+        // `else:`, `rescue`, and `end` mark block boundaries.
         if matches!(&tok.tok, Tok::Word(w) if w == "else") {
             if let Some(Tok::Colon) = p.peek_at(1).map(|t| t.tok.clone()) {
                 break;
@@ -246,11 +301,52 @@ fn parse_block(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError
         if matches!(&tok.tok, Tok::Word(w) if w == "rescue") {
             break;
         }
+        if matches!(&tok.tok, Tok::Word(w) if w == "end") {
+            break;
+        }
 
         let stmt = parse_stmt(p)?;
         stmts.push(stmt);
     }
     Ok(stmts)
+}
+
+/// Parses a mini-statement inside `for (init; cond; step)` — no trailing newline.
+/// Handles: `set x = expr`, `x = expr`, `x++`, `x--`, `x += expr`.
+fn parse_cfor_mini_stmt(p: &mut P) -> Result<Option<Stmt>, ParseError> {
+    let tok = match p.peek().cloned() { Some(t) => t, None => return Ok(None) };
+    let line = tok.line;
+
+    // Extract name and consume tokens up to the operator.
+    let name = if matches!(&tok.tok, Tok::Word(w) if w == "set") {
+        p.next(); // consume "set"
+        let nt = p.next().ok_or_else(|| ParseError::at(None, "expected variable name"))?;
+        match nt.tok { Tok::Word(s) => s, _ => return Err(ParseError::at(Some(&nt), "expected variable name")) }
+    } else if let Tok::Word(w) = &tok.tok {
+        let n = w.clone();
+        p.next(); // consume the name
+        n
+    } else {
+        return Ok(None);
+    };
+
+    // Now p.peek() is the operator.
+    match p.peek().map(|t| t.tok.clone()) {
+        Some(Tok::PlusPlus) => {
+            p.next();
+            Ok(Some(Stmt::CompoundAssign { target: AssignTarget::Name(name), op: BinOp::Add, expr: Expr::Lit(Value::Int(1)), line }))
+        }
+        Some(Tok::MinusMinus) => {
+            p.next();
+            Ok(Some(Stmt::CompoundAssign { target: AssignTarget::Name(name), op: BinOp::Sub, expr: Expr::Lit(Value::Int(1)), line }))
+        }
+        Some(Tok::PlusEq)  => { p.next(); Ok(Some(Stmt::CompoundAssign { target: AssignTarget::Name(name), op: BinOp::Add, expr: parse_expr(p)?, line })) }
+        Some(Tok::MinusEq) => { p.next(); Ok(Some(Stmt::CompoundAssign { target: AssignTarget::Name(name), op: BinOp::Sub, expr: parse_expr(p)?, line })) }
+        Some(Tok::StarEq)  => { p.next(); Ok(Some(Stmt::CompoundAssign { target: AssignTarget::Name(name), op: BinOp::Mul, expr: parse_expr(p)?, line })) }
+        Some(Tok::SlashEq) => { p.next(); Ok(Some(Stmt::CompoundAssign { target: AssignTarget::Name(name), op: BinOp::Div, expr: parse_expr(p)?, line })) }
+        Some(Tok::Equals)  => { p.next(); Ok(Some(Stmt::Assign { target: AssignTarget::Name(name), expr: parse_expr(p)?, is_const: false, line })) }
+        _ => Ok(None),
+    }
 }
 
 fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
@@ -290,8 +386,7 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
 
     if word == "return" {
         p.next();
-        // `return` followed by newline → bare return
-        if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Newline) | None) {
+        if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Newline) | Some(Tok::Semicolon) | None) {
             p.expect_newline()?;
             return Ok(Stmt::Return { expr: None, line: head_line });
         }
@@ -300,7 +395,8 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         return Ok(Stmt::Return { expr: Some(expr), line: head_line });
     }
 
-    if word == "set" {
+    if word == "set" || word == "const" {
+        let is_const = word == "const";
         p.next();
         let name_tok = p.next().ok_or_else(|| ParseError::at(None, "expected variable name"))?;
         let name = match name_tok.tok {
@@ -310,13 +406,11 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         p.expect_tok(&Tok::Equals, "`=`")?;
         let expr = parse_expr(p)?;
         p.expect_newline()?;
-        return Ok(Stmt::Set { name, expr, line: head_line });
+        return Ok(Stmt::Assign { target: AssignTarget::Name(name), expr, is_const, line: head_line });
     }
 
     if word == "if" {
         p.next();
-        // Look ahead one token to decide: legacy `if [not] <os>:` vs general `if <expr>:`.
-        // Legacy form: optional `not`, then a bare OS keyword, then `:`.
         let saved = p.pos;
         let mut maybe_negate = false;
         if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(ref w)) if w == "not") {
@@ -339,7 +433,6 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
             return Ok(Stmt::IfOs { os, negate: maybe_negate, body, else_body, line: head_line });
         }
 
-        // Reset and parse as general expression-conditioned if.
         p.pos = saved;
         let cond = parse_expr(p)?;
         p.expect_tok(&Tok::Colon, "`:`")?;
@@ -376,7 +469,6 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         p.expect_newline()?;
         let body = parse_block(p, head_col)?;
         p.skip_newlines();
-        // Require `rescue [name]:` at the same column as `try`.
         let rescue_tok = p.peek().cloned()
             .ok_or_else(|| ParseError::at(None, "expected `rescue:` after `try:` block"))?;
         if !matches!(&rescue_tok.tok, Tok::Word(w) if w == "rescue") || rescue_tok.col != head_col {
@@ -419,6 +511,28 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
 
     if word == "for" {
         p.next();
+        // C-style: `for (init; cond; step):`
+        if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::LParen)) {
+            p.next(); // `(`
+            let init = parse_cfor_mini_stmt(p)?;
+            p.expect_tok(&Tok::Semicolon, "`;`")?;
+            let cond = if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Semicolon)) {
+                None
+            } else {
+                Some(parse_expr(p)?)
+            };
+            p.expect_tok(&Tok::Semicolon, "`;`")?;
+            let step = if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::RParen)) {
+                None
+            } else {
+                parse_cfor_mini_stmt(p)?
+            };
+            p.expect_tok(&Tok::RParen, "`)`")?;
+            p.expect_tok(&Tok::Colon, "`:`")?;
+            p.expect_newline()?;
+            let body = parse_block(p, head_col)?;
+            return Ok(Stmt::CFor { init: init.map(Box::new), cond, step: step.map(Box::new), body, line: head_line });
+        }
         let var_tok = p.next().ok_or_else(|| ParseError::at(None, "expected loop variable"))?;
         let var = match var_tok.tok {
             Tok::Word(s) => s,
@@ -432,11 +546,56 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         return Ok(Stmt::For { var, iter, body, line: head_line });
     }
 
-    // `WORD = ...` — variable assignment OR legacy bash DSL.
-    // Bash DSL is opt-in via known head keywords on the RHS (`generate`,
-    // `search`, `web`, `complete`). Anything else is treated as `set`,
-    // including arithmetic like `y = x * 2 + 1`.
-    if let Some(Tok::Equals) = p.peek_at(1).map(|t| t.tok.clone()) {
+    if word == "switch" {
+        p.next();
+        let expr = parse_expr(p)?;
+        p.expect_tok(&Tok::Colon, "`:`")?;
+        p.expect_newline()?;
+        let mut cases: Vec<(Vec<Expr>, Vec<Stmt>)> = Vec::new();
+        let mut default: Option<Vec<Stmt>> = None;
+        loop {
+            p.skip_newlines();
+            let next = match p.peek() { Some(t) => t.clone(), None => break };
+            if next.col <= head_col && next.col < head_col + 4 { break; }
+            let kw = match &next.tok { Tok::Word(w) => w.clone(), _ => break };
+            if kw == "case" {
+                p.next();
+                let mut vals = vec![parse_expr(p)?];
+                while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Comma)) {
+                    p.next();
+                    vals.push(parse_expr(p)?);
+                }
+                p.expect_tok(&Tok::Colon, "`:`")?;
+                p.expect_newline()?;
+                let case_body = parse_block(p, next.col)?;
+                cases.push((vals, case_body));
+            } else if kw == "default" {
+                p.next();
+                p.expect_tok(&Tok::Colon, "`:`")?;
+                p.expect_newline()?;
+                default = Some(parse_block(p, next.col)?);
+            } else {
+                break;
+            }
+        }
+        return Ok(Stmt::Switch { expr, cases, default, line: head_line });
+    }
+
+    if word == "do" {
+        p.next();
+        p.expect_tok(&Tok::Colon, "`:`")?;
+        p.expect_newline()?;
+        let body = parse_block(p, head_col)?;
+        p.skip_newlines();
+        p.expect_word("while")?;
+        let cond = parse_expr(p)?;
+        p.expect_newline()?;
+        return Ok(Stmt::DoWhile { body, cond, line: head_line });
+    }
+
+    // `WORD = ...` / `WORD += ...` / `WORD++` / `WORD.field = ...` / `WORD[idx] = ...`
+    let next1 = p.peek_at(1).map(|t| t.tok.clone());
+    if let Some(Tok::Equals) = &next1 {
         let is_bash_dsl = matches!(p.peek_at(2).map(|t| t.tok.clone()),
             Some(Tok::Word(w)) if matches!(w.as_str(), "generate" | "search" | "web" | "complete")
         );
@@ -448,12 +607,52 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
             p.expect_newline()?;
             return Ok(Stmt::BashDsl { action, argument, line: head_line });
         } else {
-            p.next(); // word
-            p.next(); // =
+            p.next();
+            p.next();
             let expr = parse_expr(p)?;
             p.expect_newline()?;
-            return Ok(Stmt::Set { name: word, expr, line: head_line });
+            return Ok(Stmt::Assign { target: AssignTarget::Name(word), expr, is_const: false, line: head_line });
         }
+    }
+
+    if let Some(op_tok) = next1.as_ref().and_then(compound_op) {
+        p.next(); // word
+        p.next(); // op=
+        let expr = parse_expr(p)?;
+        p.expect_newline()?;
+        return Ok(Stmt::CompoundAssign {
+            target: AssignTarget::Name(word),
+            op: op_tok,
+            expr,
+            line: head_line,
+        });
+    }
+
+    if matches!(&next1, Some(Tok::PlusPlus) | Some(Tok::MinusMinus)) {
+        let op = match next1.unwrap() {
+            Tok::PlusPlus => BinOp::Add,
+            Tok::MinusMinus => BinOp::Sub,
+            _ => unreachable!(),
+        };
+        p.next(); // word
+        p.next(); // ++/--
+        p.expect_newline()?;
+        return Ok(Stmt::CompoundAssign {
+            target: AssignTarget::Name(word),
+            op,
+            expr: Expr::Lit(Value::Int(1)),
+            line: head_line,
+        });
+    }
+
+    // `WORD.field = ...` / `WORD.field += ...` / `WORD[i] = ...`
+    if matches!(&next1, Some(Tok::Dot) | Some(Tok::LBracket)) {
+        let saved = p.pos;
+        // Try to parse a place-expr (Var + chain of .field / [idx]) and check for `=` or compound after it.
+        if let Some(stmt) = try_parse_place_assign(p, &word, head_line)? {
+            return Ok(stmt);
+        }
+        p.pos = saved;
     }
 
     if word == "ai_generate" {
@@ -470,7 +669,10 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
                     p.expect_tok(&Tok::Equals, "`=`")?;
                     let v_tok = p.next().ok_or_else(|| ParseError::at(Some(&head), "expected value"))?;
                     let v = match v_tok.tok {
-                        Tok::Str(s) => s,
+                        Tok::Str(parts) => match parts.first() {
+                            Some(StrPart::Lit(s)) if parts.len() == 1 => s.clone(),
+                            _ => parts.iter().filter_map(|p| if let StrPart::Lit(s) = p { Some(s.clone()) } else { None }).collect::<Vec<_>>().join(""),
+                        },
                         Tok::Int(n) => n.to_string(),
                         Tok::Word(w) => w,
                         _ => return Err(ParseError::at(Some(&v_tok), "expected value")),
@@ -488,13 +690,89 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
     parse_call_or_fncall_stmt(p, head_line)
 }
 
+fn compound_op(t: &Tok) -> Option<BinOp> {
+    match t {
+        Tok::PlusEq => Some(BinOp::Add),
+        Tok::MinusEq => Some(BinOp::Sub),
+        Tok::StarEq => Some(BinOp::Mul),
+        Tok::SlashEq => Some(BinOp::Div),
+        Tok::PercentEq => Some(BinOp::Mod),
+        _ => None,
+    }
+}
+
+/// Try to parse `WORD (.field | [expr])+ (= | += ...) expr`. Returns Ok(Some) on success,
+/// Ok(None) if we don't see an assignment token after the place-expr.
+fn try_parse_place_assign(p: &mut P, base_name: &str, line: usize) -> Result<Option<Stmt>, ParseError> {
+    p.next(); // consume base word
+    let mut target_expr = Expr::Var(base_name.to_string());
+    let mut last_field: Option<String> = None;
+    let mut last_index: Option<Expr> = None;
+
+    loop {
+        match p.peek().map(|t| t.tok.clone()) {
+            Some(Tok::Dot) => {
+                if let Some(field) = last_field.take() {
+                    target_expr = Expr::Field { target: Box::new(target_expr), name: field, line };
+                } else if let Some(key) = last_index.take() {
+                    target_expr = Expr::Index { target: Box::new(target_expr), key: Box::new(key), line };
+                }
+                p.next();
+                let ft = p.next().ok_or_else(|| ParseError::at(None, "expected field name after `.`"))?;
+                let fname = match ft.tok {
+                    Tok::Word(s) => s,
+                    _ => return Err(ParseError::at(Some(&ft), "expected field name after `.`")),
+                };
+                last_field = Some(fname);
+            }
+            Some(Tok::LBracket) => {
+                if let Some(field) = last_field.take() {
+                    target_expr = Expr::Field { target: Box::new(target_expr), name: field, line };
+                } else if let Some(key) = last_index.take() {
+                    target_expr = Expr::Index { target: Box::new(target_expr), key: Box::new(key), line };
+                }
+                p.next();
+                let key = parse_expr(p)?;
+                p.expect_tok(&Tok::RBracket, "`]`")?;
+                last_index = Some(key);
+            }
+            _ => break,
+        }
+    }
+
+    let op_tok = p.peek().map(|t| t.tok.clone());
+    let target = match (last_field, last_index) {
+        (Some(field), None) => AssignTarget::Field { target: Box::new(target_expr), name: field },
+        (None, Some(key)) => AssignTarget::Index { target: Box::new(target_expr), key: Box::new(key) },
+        _ => return Ok(None), // shouldn't happen — caller guarantees `.` or `[`
+    };
+
+    if matches!(op_tok, Some(Tok::Equals)) {
+        p.next();
+        let expr = parse_expr(p)?;
+        p.expect_newline()?;
+        return Ok(Some(Stmt::Assign { target, expr, is_const: false, line }));
+    }
+    if let Some(op) = op_tok.as_ref().and_then(compound_op) {
+        p.next();
+        let expr = parse_expr(p)?;
+        p.expect_newline()?;
+        return Ok(Some(Stmt::CompoundAssign { target, op, expr, line }));
+    }
+    Ok(None)
+}
+
 fn parse_bash_dsl_rhs(p: &mut P) -> Result<(BashAction, String), ParseError> {
     let mut tokens: Vec<String> = Vec::new();
     loop {
         match p.peek().map(|t| t.tok.clone()) {
-            Some(Tok::Newline) | None => break,
+            Some(Tok::Newline) | Some(Tok::Semicolon) | None => break,
             Some(Tok::Word(w)) => { p.next(); tokens.push(w); }
-            Some(Tok::Str(s)) => { p.next(); tokens.push(s); }
+            Some(Tok::Str(parts)) => {
+                p.next();
+                let s: String = parts.iter().filter_map(|pa| if let StrPart::Lit(s) = pa { Some(s.clone()) } else { None }).collect::<Vec<_>>().join("");
+                tokens.push(s);
+            }
             Some(Tok::Int(n)) => { p.next(); tokens.push(n.to_string()); }
             Some(_) => break,
         }
@@ -521,19 +799,11 @@ fn parse_bash_dsl_rhs(p: &mut P) -> Result<(BashAction, String), ParseError> {
 }
 
 fn parse_call_or_fncall_stmt(p: &mut P, line: usize) -> Result<Stmt, ParseError> {
-    // Detect bare `name(args)` user-fn call vs. multi-segment command call.
-    // Heuristic: a single Word followed immediately by `(` AND nothing more
-    // after the matching `)` than newline, AND the name is NOT in the known
-    // command registry — treat as user-fn ExprStmt. Otherwise, command-style.
     if let (Some(Tok::Word(w)), Some(Tok::LParen)) = (
         p.peek().map(|t| t.tok.clone()),
         p.peek_at(1).map(|t| t.tok.clone()),
     ) {
-        // Don't consume yet — first try command-style. Command-style with
-        // multi-word names will work fine; this branch is for single-word fn
-        // calls only, and we let the dispatcher decide unknown ones.
         if !crate::stdlib::is_known_command(&w) {
-            // Parse as user-fn call
             let _ = p.next();
             p.expect_tok(&Tok::LParen, "`(`")?;
             let mut args = Vec::new();
@@ -547,8 +817,10 @@ fn parse_call_or_fncall_stmt(p: &mut P, line: usize) -> Result<Stmt, ParseError>
                     }
                 }
             }
+            // Could be followed by chained postfix ops (e.g. `f()(x)`, `f().field`).
+            let chained = parse_postfix_chain(p, Expr::FnCall { name: w, args, line })?;
             p.expect_newline()?;
-            return Ok(Stmt::ExprStmt { expr: Expr::FnCall { name: w, args, line }, line });
+            return Ok(Stmt::ExprStmt { expr: chained, line });
         }
     }
 
@@ -596,8 +868,8 @@ fn parse_arglist(p: &mut P) -> Result<(Vec<Expr>, BTreeMap<String, Expr>), Parse
             Some(Tok::RParen) => { p.next(); break; }
             Some(Tok::Comma) => { p.next(); continue; }
             Some(Tok::Word(w)) if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Equals)) => {
-                p.next(); // word
-                p.next(); // =
+                p.next();
+                p.next();
                 let v = parse_expr(p)?;
                 named.insert(w, v);
             }
@@ -610,8 +882,6 @@ fn parse_arglist(p: &mut P) -> Result<(Vec<Expr>, BTreeMap<String, Expr>), Parse
     Ok((positional, named))
 }
 
-/// Pulls an `else:` block off the token stream if one is at `cond_col`.
-/// Used by both `if`-OS and `if`-expr.
 fn parse_optional_else(p: &mut P, cond_col: usize) -> Result<Option<Vec<Stmt>>, ParseError> {
     p.skip_newlines();
     if let Some(t) = p.peek().cloned() {
@@ -626,11 +896,29 @@ fn parse_optional_else(p: &mut P, cond_col: usize) -> Result<Option<Vec<Stmt>>, 
     Ok(None)
 }
 
-/// Parse a full expression with operator precedence (low to high):
-///   or  →  and  →  not  →  comparison  →  add/sub  →  mul/div/mod
-///   →  pow (right-assoc)  →  unary  →  primary.
+/// Expression precedence (low to high):
+///   ternary → or → and → not → comparison → bit-or → bit-xor → bit-and
+///   → shift → add/sub → mul/div/mod → power (right-assoc) → unary → postfix → primary.
 pub fn parse_expr(p: &mut P) -> Result<Expr, ParseError> {
-    parse_logical_or(p)
+    parse_ternary(p)
+}
+
+fn parse_ternary(p: &mut P) -> Result<Expr, ParseError> {
+    let cond = parse_logical_or(p)?;
+    if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Question)) {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let then_expr = parse_ternary(p)?;
+        p.expect_tok(&Tok::Colon, "`:` in ternary")?;
+        let else_expr = parse_ternary(p)?;
+        return Ok(Expr::Ternary {
+            cond: Box::new(cond),
+            then_expr: Box::new(then_expr),
+            else_expr: Box::new(else_expr),
+            line,
+        });
+    }
+    Ok(cond)
 }
 
 fn parse_logical_or(p: &mut P) -> Result<Expr, ParseError> {
@@ -666,7 +954,7 @@ fn parse_logical_not(p: &mut P) -> Result<Expr, ParseError> {
 }
 
 fn parse_comparison(p: &mut P) -> Result<Expr, ParseError> {
-    let left = parse_additive(p)?;
+    let left = parse_bit_or(p)?;
     let op = match p.peek().map(|t| t.tok.clone()) {
         Some(Tok::EqEq)  => Some(BinOp::Eq),
         Some(Tok::BangEq) => Some(BinOp::Ne),
@@ -679,8 +967,57 @@ fn parse_comparison(p: &mut P) -> Result<Expr, ParseError> {
     if let Some(op) = op {
         let line = p.peek().map(|t| t.line).unwrap_or(0);
         p.next();
-        let right = parse_additive(p)?;
+        let right = parse_bit_or(p)?;
         return Ok(Expr::Binary { op, lhs: Box::new(left), rhs: Box::new(right), line });
+    }
+    Ok(left)
+}
+
+fn parse_bit_or(p: &mut P) -> Result<Expr, ParseError> {
+    let mut left = parse_bit_xor(p)?;
+    while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Pipe)) {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_bit_xor(p)?;
+        left = Expr::Binary { op: BinOp::BitOr, lhs: Box::new(left), rhs: Box::new(right), line };
+    }
+    Ok(left)
+}
+
+fn parse_bit_xor(p: &mut P) -> Result<Expr, ParseError> {
+    let mut left = parse_bit_and(p)?;
+    while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::CaretCaret)) {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_bit_and(p)?;
+        left = Expr::Binary { op: BinOp::BitXor, lhs: Box::new(left), rhs: Box::new(right), line };
+    }
+    Ok(left)
+}
+
+fn parse_bit_and(p: &mut P) -> Result<Expr, ParseError> {
+    let mut left = parse_shift(p)?;
+    while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Amp)) {
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_shift(p)?;
+        left = Expr::Binary { op: BinOp::BitAnd, lhs: Box::new(left), rhs: Box::new(right), line };
+    }
+    Ok(left)
+}
+
+fn parse_shift(p: &mut P) -> Result<Expr, ParseError> {
+    let mut left = parse_additive(p)?;
+    loop {
+        let op = match p.peek().map(|t| t.tok.clone()) {
+            Some(Tok::LtLt) => BinOp::Shl,
+            Some(Tok::GtGt) => BinOp::Shr,
+            _ => break,
+        };
+        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        p.next();
+        let right = parse_additive(p)?;
+        left = Expr::Binary { op, lhs: Box::new(left), rhs: Box::new(right), line };
     }
     Ok(left)
 }
@@ -738,35 +1075,107 @@ fn parse_unary(p: &mut P) -> Result<Expr, ParseError> {
             Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(inner), line })
         }
         Some(Tok::Plus) => { p.next(); parse_unary(p) }
+        Some(Tok::Tilde) => {
+            let line = p.peek().map(|t| t.line).unwrap_or(0);
+            p.next();
+            let inner = parse_unary(p)?;
+            Ok(Expr::Unary { op: UnaryOp::BitNot, expr: Box::new(inner), line })
+        }
         _ => parse_primary(p),
     }
 }
 
 fn parse_primary(p: &mut P) -> Result<Expr, ParseError> {
     let base = parse_atom(p)?;
-    parse_indexing(p, base)
+    parse_postfix_chain(p, base)
 }
 
-/// `expr[key][key2]...` — postfix indexing into list/map.
-fn parse_indexing(p: &mut P, mut target: Expr) -> Result<Expr, ParseError> {
-    while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::LBracket)) {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
-        p.next();
-        let key = parse_expr(p)?;
-        p.expect_tok(&Tok::RBracket, "`]`")?;
-        target = Expr::Index { target: Box::new(target), key: Box::new(key), line };
+/// Postfix chain: `[idx]`, `.name`, `(args)`. Lets us write `f(x).field[0]`.
+fn parse_postfix_chain(p: &mut P, mut target: Expr) -> Result<Expr, ParseError> {
+    loop {
+        match p.peek().map(|t| t.tok.clone()) {
+            Some(Tok::LBracket) => {
+                let line = p.peek().map(|t| t.line).unwrap_or(0);
+                p.next();
+                let key = parse_expr(p)?;
+                p.expect_tok(&Tok::RBracket, "`]`")?;
+                target = Expr::Index { target: Box::new(target), key: Box::new(key), line };
+            }
+            Some(Tok::Dot) => {
+                let line = p.peek().map(|t| t.line).unwrap_or(0);
+                p.next();
+                let nt = p.next().ok_or_else(|| ParseError::at(None, "expected field name after `.`"))?;
+                let name = match nt.tok {
+                    Tok::Word(s) => s,
+                    _ => return Err(ParseError::at(Some(&nt), "expected field name after `.`")),
+                };
+                target = Expr::Field { target: Box::new(target), name, line };
+            }
+            Some(Tok::LParen) => {
+                let line = p.peek().map(|t| t.line).unwrap_or(0);
+                p.next();
+                let mut args: Vec<Expr> = Vec::new();
+                loop {
+                    match p.peek().map(|t| t.tok.clone()) {
+                        Some(Tok::RParen) => { p.next(); break; }
+                        Some(Tok::Comma) => { p.next(); continue; }
+                        _ => {
+                            let e = parse_expr(p)?;
+                            args.push(e);
+                        }
+                    }
+                }
+                target = Expr::CallValue { callee: Box::new(target), args, line };
+            }
+            _ => break,
+        }
     }
     Ok(target)
+}
+
+fn parse_lambda(p: &mut P) -> Result<Expr, ParseError> {
+    let header_line = p.peek().map(|t| t.line).unwrap_or(0);
+    p.expect_word("fn")?;
+    p.expect_tok(&Tok::LParen, "`(`")?;
+    let mut params: Vec<String> = Vec::new();
+    loop {
+        match p.peek().map(|t| t.tok.clone()) {
+            Some(Tok::RParen) => { p.next(); break; }
+            Some(Tok::Comma) => { p.next(); continue; }
+            Some(Tok::Word(w)) => { p.next(); params.push(w); }
+            _ => return Err(ParseError::at(p.peek(), "expected param name or `)`")),
+        }
+    }
+    // Two body forms:
+    //   fn(x) -> expr               (single-expr lambda)
+    //   fn(x): ... end              (block lambda)
+    if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Arrow)) {
+        p.next();
+        let expr = parse_expr(p)?;
+        let body = vec![Stmt::Return { expr: Some(expr), line: header_line }];
+        return Ok(Expr::Lambda { params, body, line: header_line });
+    }
+    if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Colon)) {
+        p.next();
+        p.expect_newline()?;
+        let body = parse_block(p, 0)?;
+        let end_tok = p.next().ok_or_else(|| ParseError::at(None, "expected `end` to close lambda"))?;
+        match &end_tok.tok {
+            Tok::Word(w) if w == "end" => {}
+            _ => return Err(ParseError::at(Some(&end_tok), "expected `end` to close lambda")),
+        }
+        return Ok(Expr::Lambda { params, body, line: header_line });
+    }
+    Err(ParseError::at(p.peek(), "expected `->` or `:` after lambda parameters"))
 }
 
 fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
     let head = p.peek().cloned().ok_or_else(|| ParseError::at(None, "expected expression"))?;
     match head.tok.clone() {
-        Tok::Str(s) => { p.next(); Ok(Expr::Lit(Value::Str(s))) }
+        Tok::Str(parts) => { p.next(); Ok(build_string_expr(parts, head.line)?) }
         Tok::Int(n) => { p.next(); Ok(Expr::Lit(Value::Int(n))) }
         Tok::Float(f) => { p.next(); Ok(Expr::Lit(Value::Float(f))) }
         Tok::LBrace => {
-            // Map literal: `{"key": value, "k2": v2}`
             let line = head.line;
             p.next();
             let mut entries: Vec<(Expr, Expr)> = Vec::new();
@@ -774,6 +1183,7 @@ fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
                 match p.peek().map(|t| t.tok.clone()) {
                     Some(Tok::RBrace) => { p.next(); break; }
                     Some(Tok::Comma) => { p.next(); continue; }
+                    Some(Tok::Newline) => { p.next(); continue; }
                     _ => {
                         let k = parse_expr(p)?;
                         p.expect_tok(&Tok::Colon, "`:`")?;
@@ -806,23 +1216,72 @@ fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
             Ok(Expr::List(items))
         }
         Tok::Word(w) => {
-            // Identifier — may be: bool literal, variable, fn call, or command call.
-            // - `true` / `false` → bool literal
-            // - `name(...)` → user-fn call OR command call (dispatcher decides)
-            // - `name` alone → variable reference
-            // - multi-word + `(` → command call
             if w == "true" { p.next(); return Ok(Expr::Lit(Value::Bool(true))); }
             if w == "false" { p.next(); return Ok(Expr::Lit(Value::Bool(false))); }
             if w == "nil" { p.next(); return Ok(Expr::Lit(Value::Nil)); }
+            if w == "fn" { return parse_lambda(p); }
 
-            // Single word + `(` → call (we decide user-fn vs. command at that level)
+            // `Module::name` — collapse into single dotted name.
+            if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::ColonColon)) {
+                p.next(); // module word
+                p.next(); // ::
+                let nt = p.next().ok_or_else(|| ParseError::at(None, "expected name after `::`"))?;
+                let nm = match nt.tok {
+                    Tok::Word(s) => s,
+                    _ => return Err(ParseError::at(Some(&nt), "expected name after `::`")),
+                };
+                let combined = format!("{}_{}", w, nm);
+                if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::LParen)) {
+                    let line = head.line;
+                    let _ = p.next();
+                    let mut args = Vec::new();
+                    loop {
+                        match p.peek().map(|t| t.tok.clone()) {
+                            Some(Tok::RParen) => { p.next(); break; }
+                            Some(Tok::Comma) => { p.next(); continue; }
+                            _ => { let e = parse_expr(p)?; args.push(e); }
+                        }
+                    }
+                    return Ok(Expr::FnCall { name: combined, args, line });
+                }
+                return Ok(Expr::Var(combined));
+            }
+
+            // `Name { x: 1, y: 2 }` — struct literal. Reserve only when next `{` looks like field list.
+            // Heuristic: capitalized identifier OR followed by `Word :` inside braces.
+            if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::LBrace)) {
+                let looks_like_struct = matches!(
+                    (p.peek_at(2).map(|t| t.tok.clone()), p.peek_at(3).map(|t| t.tok.clone())),
+                    (Some(Tok::Word(_)), Some(Tok::Colon)) | (Some(Tok::RBrace), _)
+                );
+                if looks_like_struct {
+                    p.next(); // word
+                    p.next(); // {
+                    let mut fields: Vec<(String, Expr)> = Vec::new();
+                    loop {
+                        p.skip_newlines();
+                        match p.peek().map(|t| t.tok.clone()) {
+                            Some(Tok::RBrace) => { p.next(); break; }
+                            Some(Tok::Comma) => { p.next(); continue; }
+                            Some(Tok::Word(fname)) => {
+                                p.next();
+                                p.expect_tok(&Tok::Colon, "`:`")?;
+                                let v = parse_expr(p)?;
+                                fields.push((fname, v));
+                            }
+                            _ => return Err(ParseError::at(p.peek(), "expected field name in struct literal")),
+                        }
+                    }
+                    return Ok(Expr::StructLit { name: w, fields, line: head.line });
+                }
+            }
+
             if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::LParen)) {
                 if crate::stdlib::is_known_command(&w) {
                     let line = head.line;
                     let segments = parse_call_segments(p)?;
                     return Ok(Expr::Call { segments, line });
                 } else {
-                    // user-fn call
                     let _ = p.next();
                     p.expect_tok(&Tok::LParen, "`(`")?;
                     let mut args = Vec::new();
@@ -840,21 +1299,41 @@ fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
                 }
             }
 
-            // Multi-word command call (e.g. `read file("...")`): parse as call segments.
-            // Heuristic: peek the longest word-run; if any of those words combined
-            // is a known prefix of a multi-word command, parse as command call.
-            // Simplest: if next token after the leading word is also a Word, it's
-            // a multi-word command; parse via parse_call_segments.
             if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Word(_))) {
                 let line = head.line;
                 let segments = parse_call_segments(p)?;
                 return Ok(Expr::Call { segments, line });
             }
 
-            // Bare identifier → variable
             p.next();
             Ok(Expr::Var(w))
         }
         _ => Err(ParseError::at(Some(&head), format!("unexpected token in expression: {:?}", head.tok))),
     }
+}
+
+/// Convert lexer's `Tok::Str(parts)` into either a plain string literal (when
+/// no `{...}` interpolation is used) or an `InterpStr` expression. Embedded
+/// expression sources are re-tokenized + re-parsed here.
+fn build_string_expr(parts: Vec<StrPart>, line: usize) -> Result<Expr, ParseError> {
+    let has_interp = parts.iter().any(|p| matches!(p, StrPart::Expr(_)));
+    if !has_interp {
+        let s: String = parts.into_iter().filter_map(|p| if let StrPart::Lit(s) = p { Some(s) } else { None }).collect::<Vec<_>>().join("");
+        return Ok(Expr::Lit(Value::Str(s)));
+    }
+    let mut out: Vec<InterpPart> = Vec::new();
+    for part in parts {
+        match part {
+            StrPart::Lit(s) => out.push(InterpPart::Lit(s)),
+            StrPart::Expr(src) => {
+                let tokens = crate::lexer::tokenize(&src)
+                    .map_err(|e| ParseError { line, message: format!("interp: lex error: {}", e.message) })?;
+                let mut sub = P::new(tokens);
+                sub.skip_newlines();
+                let e = parse_expr(&mut sub)?;
+                out.push(InterpPart::Expr(e));
+            }
+        }
+    }
+    Ok(Expr::InterpStr { parts: out, line })
 }

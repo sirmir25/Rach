@@ -79,5 +79,14 @@ fn value_to_json(v: &Value) -> JsonValue {
             }
             JsonValue::Object(obj)
         }
+        Value::Struct { name, fields } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("__type__".to_string(), JsonValue::String(name.clone()));
+            for (k, val) in fields {
+                obj.insert(k.clone(), value_to_json(val));
+            }
+            JsonValue::Object(obj)
+        }
+        Value::Lambda { .. } => JsonValue::String("<lambda>".to_string()),
     }
 }

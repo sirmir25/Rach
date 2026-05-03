@@ -1,6 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::ast::{BashAction, BinOp, CallSegment, Expr, Function, Program, Stmt, UnaryOp, Value};
+use crate::ast::{
+    AssignTarget, BashAction, BinOp, CallSegment, Expr, Function, InterpPart, Program, Stmt,
+    StructDef, UnaryOp, Value,
+};
 use crate::stdlib;
 use crate::stdlib::logging::LogState;
 use crate::stdlib::webdriver::Session;
@@ -19,30 +22,26 @@ impl RuntimeError {
     }
 }
 
+#[derive(Default)]
+pub struct Scope {
+    pub vars: HashMap<String, Value>,
+    pub consts: HashSet<String>,
+}
+
 pub struct Ctx {
     pub imports: HashSet<String>,
     pub current_os: String,
     pub wd: Option<Session>,
     pub wd_unavailable: Option<String>,
     pub headless: bool,
-    /// Variable scopes — pushed on function entry / `for`, popped on exit.
-    pub scopes: Vec<HashMap<String, Value>>,
-    /// User-defined functions.
+    pub scopes: Vec<Scope>,
     pub functions: HashMap<String, Function>,
-    /// `RACH_STRICT=1` — turn `error N` into a hard runtime error that
-    /// aborts execution (instead of just printing).
+    pub structs: HashMap<String, StructDef>,
     pub strict: bool,
-    /// True while evaluating the RHS of `set x = ...` — stdlib commands check
-    /// this to skip side-effecting prints when their result is being captured.
     pub capturing: bool,
-    /// Depth of nested `try:` blocks. When > 0, runtime errors propagate
-    /// instead of being printed-and-continued.
     pub try_depth: usize,
-    /// Source text of the running script, used by the pretty error printer.
     pub source: String,
-    /// Path of the running script, shown in error headers.
     pub script_path: String,
-    /// Logging state — level, ring buffer, and optional file mirror.
     pub log: LogState,
 }
 
@@ -54,28 +53,42 @@ impl Ctx {
 
     pub fn lookup(&self, name: &str) -> Option<Value> {
         for scope in self.scopes.iter().rev() {
-            if let Some(v) = scope.get(name) { return Some(v.clone()); }
+            if let Some(v) = scope.vars.get(name) { return Some(v.clone()); }
         }
         None
     }
 
-    pub fn set_var(&mut self, name: String, value: Value) {
-        // If the variable already exists in any enclosing scope, update it there.
-        // Otherwise, create it in the topmost (current) scope.
+    pub fn set_var(&mut self, name: String, value: Value) -> Result<(), RuntimeError> {
+        for scope in self.scopes.iter().rev() {
+            if scope.consts.contains(&name) {
+                return Err(RuntimeError::new(400, 0, format!("cannot reassign const `{}`", name)));
+            }
+        }
         for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(&name) {
-                scope.insert(name, value);
-                return;
+            if scope.vars.contains_key(&name) {
+                scope.vars.insert(name, value);
+                return Ok(());
             }
         }
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, value);
+            scope.vars.insert(name, value);
         }
+        Ok(())
     }
 
-    /// Print a runtime error in the same multi-line "rustc" format used for
-    /// lex / parse errors, with a caret pointing to the offending source line.
-    /// `code` echoes the HTTP-ish error code; `line` is 1-based (0 = no line).
+    pub fn declare_const(&mut self, name: String, value: Value) -> Result<(), RuntimeError> {
+        for scope in self.scopes.iter().rev() {
+            if scope.consts.contains(&name) {
+                return Err(RuntimeError::new(400, 0, format!("const `{}` already defined", name)));
+            }
+        }
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.vars.insert(name.clone(), value);
+            scope.consts.insert(name);
+        }
+        Ok(())
+    }
+
     pub fn report_error(&self, code: i64, line: usize, message: &str) {
         report_pretty("runtime", code, &self.script_path, line, message, Some(&self.source));
     }
@@ -117,8 +130,6 @@ pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, message: &
     eprintln!("{}// {} error {} string {}{}", dim, stage, code, line, reset);
 }
 
-/// Signal codes carried in `RuntimeError::code` for non-error control flow.
-/// All real error codes are >= 0; signals are negative.
 const RETURN_SIGNAL_CODE:   i64 = -1;
 const BREAK_SIGNAL_CODE:    i64 = -2;
 const CONTINUE_SIGNAL_CODE: i64 = -3;
@@ -143,6 +154,13 @@ fn serialize_value(v: &Value) -> String {
                 .map(|(k, v)| format!("{}\u{1E}{}", k, serialize_value(v)))
                 .collect();
             format!("N::map::{}", parts.join("\u{1F}"))
+        }
+        // Structs and lambdas are passed by reference through a side-channel
+        // to avoid the awful round-trip serialization. We stash the live Value
+        // in a thread-local LRU and put a token here.
+        Value::Struct { .. } | Value::Lambda { .. } => {
+            let tok = stash_value(v.clone());
+            format!("N::ref::{}", tok)
         }
     }
 }
@@ -177,10 +195,41 @@ fn deserialize_value(s: &str) -> Value {
         }
         return Value::Map(map);
     }
+    if let Some(rest) = s.strip_prefix("N::ref::") {
+        if let Ok(tok) = rest.parse::<u64>() {
+            if let Some(v) = unstash_value(tok) {
+                return v;
+            }
+        }
+        return Value::Nil;
+    }
     Value::Str(s.to_string())
 }
 
-/// Build an empty Ctx for use by the REPL or other embedders. Loads no program.
+// ---- Side-channel for non-serializable Values (Struct, Lambda) ----
+//
+// `return_signal` round-trips through a String, which is fine for primitives
+// but loses information for types that contain Stmt or nested Values cheaply.
+// Stash them in a thread-local map and return a token instead.
+thread_local! {
+    static REF_STORE: std::cell::RefCell<std::collections::HashMap<u64, Value>>
+        = std::cell::RefCell::new(std::collections::HashMap::new());
+    static REF_NEXT: std::cell::Cell<u64> = std::cell::Cell::new(1);
+}
+
+fn stash_value(v: Value) -> u64 {
+    REF_NEXT.with(|n| {
+        let id = n.get();
+        n.set(id.wrapping_add(1));
+        REF_STORE.with(|s| s.borrow_mut().insert(id, v));
+        id
+    })
+}
+
+fn unstash_value(tok: u64) -> Option<Value> {
+    REF_STORE.with(|s| s.borrow_mut().remove(&tok))
+}
+
 pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
     Ctx {
         imports: HashSet::new(),
@@ -188,8 +237,9 @@ pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
         wd: None,
         wd_unavailable: None,
         headless: std::env::var("RACH_HEADLESS").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false),
-        scopes: vec![HashMap::new()],
+        scopes: vec![Scope::default()],
         functions: HashMap::new(),
+        structs: HashMap::new(),
         strict,
         capturing: false,
         try_depth: 0,
@@ -199,14 +249,13 @@ pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
     }
 }
 
-/// Run a parsed program against an *existing* Ctx (variables, functions, and
-/// browser session persist). Used by the REPL.
 pub fn run_in_ctx(program: &Program, ctx: &mut Ctx) -> Result<(), RuntimeError> {
-    // Merge any helper functions defined at top level.
     for f in &program.functions {
         ctx.functions.insert(f.name.clone(), f.clone());
     }
-    // Then run the implicit/explicit main body, if any, in the persistent scopes.
+    for s in &program.structs {
+        ctx.structs.insert(s.name.clone(), s.clone());
+    }
     if let Some(main) = program.functions.iter().find(|f| f.name == "main") {
         let result = run_block(&main.body, ctx);
         match result {
@@ -240,6 +289,10 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
     for f in &program.functions {
         functions.insert(f.name.clone(), f.clone());
     }
+    let mut structs: HashMap<String, StructDef> = HashMap::new();
+    for s in &program.structs {
+        structs.insert(s.name.clone(), s.clone());
+    }
 
     let mut ctx = Ctx {
         imports,
@@ -247,8 +300,9 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
         wd: None,
         wd_unavailable: None,
         headless,
-        scopes: vec![HashMap::new()],
+        scopes: vec![Scope::default()],
         functions,
+        structs,
         strict,
         capturing: false,
         try_depth: 0,
@@ -315,8 +369,8 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
                 }
             };
             for item in items {
-                ctx.scopes.push(HashMap::new());
-                ctx.set_var(var.clone(), item);
+                ctx.scopes.push(Scope::default());
+                ctx.set_var(var.clone(), item)?;
                 let res = run_block(body, ctx);
                 ctx.scopes.pop();
                 match res {
@@ -341,7 +395,7 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             loop {
                 let v = eval_expr(cond, ctx)?;
                 if !v.is_truthy() { break; }
-                ctx.scopes.push(HashMap::new());
+                ctx.scopes.push(Scope::default());
                 let res = run_block(body, ctx);
                 ctx.scopes.pop();
                 match res {
@@ -353,12 +407,8 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             }
             Ok(())
         }
-        Stmt::Break { line } => {
-            Err(RuntimeError::new(BREAK_SIGNAL_CODE, *line, "break"))
-        }
-        Stmt::Continue { line } => {
-            Err(RuntimeError::new(CONTINUE_SIGNAL_CODE, *line, "continue"))
-        }
+        Stmt::Break { line } => Err(RuntimeError::new(BREAK_SIGNAL_CODE, *line, "break")),
+        Stmt::Continue { line } => Err(RuntimeError::new(CONTINUE_SIGNAL_CODE, *line, "continue")),
         Stmt::Try { body, rescue_var, rescue_body, line: _ } => {
             ctx.try_depth += 1;
             let res = run_block(body, ctx);
@@ -372,7 +422,7 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
                         err_map.insert("code".to_string(), Value::Int(e.code));
                         err_map.insert("line".to_string(), Value::Int(e.line as i64));
                         err_map.insert("message".to_string(), Value::Str(e.message));
-                        ctx.set_var(name.clone(), Value::Map(err_map));
+                        ctx.set_var(name.clone(), Value::Map(err_map))?;
                     }
                     run_block(rescue_body, ctx)
                 }
@@ -389,13 +439,21 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             }
             Ok(())
         }
-        Stmt::Set { name, expr, line: _ } => {
+        Stmt::Assign { target, expr, is_const, line } => {
             ctx.capturing = true;
             let v = eval_expr(expr, ctx);
             ctx.capturing = false;
             let v = v?;
-            ctx.set_var(name.clone(), v);
-            Ok(())
+            assign_to_target(target, v, *is_const, *line, ctx)
+        }
+        Stmt::CompoundAssign { target, op, expr, line } => {
+            let cur = read_target(target, ctx, *line)?;
+            ctx.capturing = true;
+            let rhs = eval_expr(expr, ctx);
+            ctx.capturing = false;
+            let rhs = rhs?;
+            let new_val = eval_binary(*op, &cur, &rhs, *line)?;
+            assign_to_target(target, new_val, false, *line, ctx)
         }
         Stmt::BashDsl { action, argument, line } => {
             stdlib::bash::run_bash_dsl(action, argument, *line)?;
@@ -431,6 +489,232 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             let _ = eval_expr(expr, ctx)?;
             Ok(())
         }
+        Stmt::Switch { expr, cases, default, line: _ } => {
+            let val = eval_expr(expr, ctx)?;
+            let mut matched = false;
+            'outer: for (patterns, body) in cases {
+                for pat in patterns {
+                    let pv = eval_expr(pat, ctx)?;
+                    if values_equal(&val, &pv) {
+                        ctx.scopes.push(Scope::default());
+                        let res = run_block(body, ctx);
+                        ctx.scopes.pop();
+                        // propagate break/continue/return but swallow them for switch-internal breaks
+                        match res {
+                            Ok(()) => {}
+                            Err(e) if e.code == BREAK_SIGNAL_CODE => {}
+                            Err(e) => return Err(e),
+                        }
+                        matched = true;
+                        break 'outer;
+                    }
+                }
+            }
+            if !matched {
+                if let Some(def) = default {
+                    ctx.scopes.push(Scope::default());
+                    let res = run_block(def, ctx);
+                    ctx.scopes.pop();
+                    match res {
+                        Ok(()) => {}
+                        Err(e) if e.code == BREAK_SIGNAL_CODE => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+            Ok(())
+        }
+        Stmt::DoWhile { body, cond, line: _ } => {
+            loop {
+                ctx.scopes.push(Scope::default());
+                let res = run_block(body, ctx);
+                ctx.scopes.pop();
+                match res {
+                    Ok(()) => {}
+                    Err(e) if e.code == BREAK_SIGNAL_CODE => break,
+                    Err(e) if e.code == CONTINUE_SIGNAL_CODE => {}
+                    Err(e) => return Err(e),
+                }
+                let v = eval_expr(cond, ctx)?;
+                if !v.is_truthy() { break; }
+            }
+            Ok(())
+        }
+        Stmt::CFor { init, cond, step, body, line } => {
+            ctx.scopes.push(Scope::default());
+            if let Some(init_stmt) = init {
+                run_stmt(init_stmt, ctx)?;
+            }
+            loop {
+                if let Some(cond_expr) = cond {
+                    let v = eval_expr(cond_expr, ctx)?;
+                    if !v.is_truthy() { break; }
+                }
+                ctx.scopes.push(Scope::default());
+                let res = run_block(body, ctx);
+                ctx.scopes.pop();
+                match res {
+                    Ok(()) => {}
+                    Err(e) if e.code == BREAK_SIGNAL_CODE => { ctx.scopes.pop(); return Ok(()); }
+                    Err(e) if e.code == CONTINUE_SIGNAL_CODE => {}
+                    Err(e) => { ctx.scopes.pop(); return Err(e); }
+                }
+                if let Some(step_stmt) = step {
+                    run_stmt(step_stmt, ctx).map_err(|e| RuntimeError::new(e.code, *line, e.message))?;
+                }
+            }
+            ctx.scopes.pop();
+            Ok(())
+        }
+    }
+}
+
+fn read_target(target: &AssignTarget, ctx: &mut Ctx, line: usize) -> Result<Value, RuntimeError> {
+    match target {
+        AssignTarget::Name(name) => ctx.lookup(name)
+            .ok_or_else(|| RuntimeError::new(404, line, format!("undefined variable `{}`", name))),
+        AssignTarget::Index { target, key } => {
+            let t = eval_expr(target, ctx)?;
+            let k = eval_expr(key, ctx)?;
+            index_into(&t, &k, line)
+        }
+        AssignTarget::Field { target, name } => {
+            let t = eval_expr(target, ctx)?;
+            field_of(&t, name, line)
+        }
+    }
+}
+
+fn assign_to_target(target: &AssignTarget, value: Value, is_const: bool, line: usize, ctx: &mut Ctx) -> Result<(), RuntimeError> {
+    match target {
+        AssignTarget::Name(name) => {
+            if is_const {
+                ctx.declare_const(name.clone(), value)?;
+            } else {
+                ctx.set_var(name.clone(), value)?;
+            }
+            Ok(())
+        }
+        AssignTarget::Index { target, key } => {
+            let key_val = eval_expr(key, ctx)?;
+            mutate_place(target, ctx, line, Box::new(move |container| {
+                match container {
+                    Value::List(items) => {
+                        let i = key_val.as_f64().ok_or_else(|| RuntimeError::new(400, line, "list index must be int"))? as i64;
+                        let n = items.len() as i64;
+                        let idx = if i < 0 { i + n } else { i };
+                        if idx < 0 || idx as usize >= items.len() {
+                            return Err(RuntimeError::new(404, line, format!("list index out of range: {}", i)));
+                        }
+                        items[idx as usize] = value;
+                        Ok(())
+                    }
+                    Value::Map(m) => {
+                        m.insert(key_val.as_str(), value);
+                        Ok(())
+                    }
+                    Value::Struct { fields, .. } => {
+                        fields.insert(key_val.as_str(), value);
+                        Ok(())
+                    }
+                    other => Err(RuntimeError::new(400, line, format!("cannot index-assign into {:?}", other))),
+                }
+            }))
+        }
+        AssignTarget::Field { target, name } => {
+            let field_name = name.clone();
+            mutate_place(target, ctx, line, Box::new(move |container| {
+                match container {
+                    Value::Struct { fields, .. } => { fields.insert(field_name, value); Ok(()) }
+                    Value::Map(m) => { m.insert(field_name, value); Ok(()) }
+                    other => Err(RuntimeError::new(400, line, format!("cannot field-assign on {:?}", other))),
+                }
+            }))
+        }
+    }
+}
+
+fn mutate_place(expr: &Expr, ctx: &mut Ctx, line: usize, mutator: Box<dyn FnOnce(&mut Value) -> Result<(), RuntimeError>>) -> Result<(), RuntimeError> {
+    match expr {
+        Expr::Var(name) => {
+            let mut v = ctx.lookup(name).ok_or_else(|| RuntimeError::new(404, line, format!("undefined variable `{}`", name)))?;
+            mutator(&mut v)?;
+            ctx.set_var(name.clone(), v)?;
+            Ok(())
+        }
+        Expr::Field { target, name, line: l } => {
+            let field = name.clone();
+            let l = *l;
+            mutate_place(target, ctx, l, Box::new(move |outer| {
+                let inner = field_mut(outer, &field, l)?;
+                mutator(inner)
+            }))
+        }
+        Expr::Index { target, key, line: l } => {
+            let key_val = eval_expr(key, ctx)?;
+            let l = *l;
+            mutate_place(target, ctx, l, Box::new(move |outer| {
+                let inner = index_mut(outer, &key_val, l)?;
+                mutator(inner)
+            }))
+        }
+        _ => Err(RuntimeError::new(400, line, "left-hand side is not assignable")),
+    }
+}
+
+fn field_mut<'a>(v: &'a mut Value, name: &str, line: usize) -> Result<&'a mut Value, RuntimeError> {
+    match v {
+        Value::Struct { fields, .. } => fields.get_mut(name).ok_or_else(|| RuntimeError::new(404, line, format!("no field `{}`", name))),
+        Value::Map(m) => Ok(m.entry(name.to_string()).or_insert(Value::Nil)),
+        other => Err(RuntimeError::new(400, line, format!("cannot access field `{}` on {:?}", name, other))),
+    }
+}
+
+fn index_mut<'a>(v: &'a mut Value, key: &Value, line: usize) -> Result<&'a mut Value, RuntimeError> {
+    match v {
+        Value::List(items) => {
+            let i = key.as_f64().ok_or_else(|| RuntimeError::new(400, line, "list index must be int"))? as i64;
+            let n = items.len() as i64;
+            let idx = if i < 0 { i + n } else { i };
+            items.get_mut(idx as usize).ok_or_else(|| RuntimeError::new(404, line, format!("list index out of range: {}", i)))
+        }
+        Value::Map(m) => Ok(m.entry(key.as_str()).or_insert(Value::Nil)),
+        Value::Struct { fields, .. } => Ok(fields.entry(key.as_str()).or_insert(Value::Nil)),
+        other => Err(RuntimeError::new(400, line, format!("cannot index into {:?}", other))),
+    }
+}
+
+fn field_of(v: &Value, name: &str, line: usize) -> Result<Value, RuntimeError> {
+    match v {
+        Value::Struct { fields, .. } => fields.get(name).cloned().ok_or_else(|| RuntimeError::new(404, line, format!("no field `{}`", name))),
+        Value::Map(m) => Ok(m.get(name).cloned().unwrap_or(Value::Nil)),
+        other => Err(RuntimeError::new(400, line, format!("cannot read field `{}` on {:?}", name, other))),
+    }
+}
+
+fn index_into(t: &Value, k: &Value, line: usize) -> Result<Value, RuntimeError> {
+    match (t, k) {
+        (Value::List(items), Value::Int(i)) => {
+            let n = items.len() as i64;
+            let idx = if *i < 0 { *i + n } else { *i };
+            items.get(idx as usize).cloned()
+                .ok_or_else(|| RuntimeError::new(404, line, format!("list index out of range: {}", i)))
+        }
+        (Value::Map(m), _) => {
+            let key_str = k.as_str();
+            Ok(m.get(&key_str).cloned().unwrap_or(Value::Nil))
+        }
+        (Value::Struct { fields, .. }, _) => {
+            Ok(fields.get(&k.as_str()).cloned().unwrap_or(Value::Nil))
+        }
+        (Value::Str(s), Value::Int(i)) => {
+            let chars: Vec<char> = s.chars().collect();
+            let n = chars.len() as i64;
+            let idx = if *i < 0 { *i + n } else { *i };
+            chars.get(idx as usize).map(|c| Value::Str(c.to_string()))
+                .ok_or_else(|| RuntimeError::new(404, line, format!("string index out of range: {}", i)))
+        }
+        _ => Err(RuntimeError::new(400, line, format!("cannot index {:?} by {:?}", t, k))),
     }
 }
 
@@ -473,35 +757,30 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
         }
         Expr::FnCall { name, args, line } => {
             let mut arg_values = Vec::with_capacity(args.len());
-            for a in args {
-                arg_values.push(eval_expr(a, ctx)?);
+            for a in args { arg_values.push(eval_expr(a, ctx)?); }
+            // First: is `name` a variable holding a Lambda? (e.g. `square = fn(x) -> ...`)
+            if let Some(v) = ctx.lookup(name) {
+                if matches!(v, Value::Lambda { .. }) {
+                    return call_value(&v, arg_values, *line, ctx);
+                }
             }
-            let func = ctx.functions.get(name).cloned()
-                .ok_or_else(|| RuntimeError::new(404, *line, format!("undefined function `{}`", name)))?;
-
-            if arg_values.len() != func.params.len() {
-                return Err(RuntimeError::new(400, *line, format!(
-                    "function `{}` expects {} argument(s), got {}",
-                    name, func.params.len(), arg_values.len()
-                )));
+            call_user_function(name, arg_values, *line, ctx)
+        }
+        Expr::CallValue { callee, args, line } => {
+            let mut arg_values = Vec::with_capacity(args.len());
+            for a in args { arg_values.push(eval_expr(a, ctx)?); }
+            // If callee is `Var(name)` and `name` is a known user function, prefer calling
+            // it by name (so functions defined later still resolve). Otherwise eval the
+            // callee to a Value and call that.
+            if let Expr::Var(name) = callee.as_ref() {
+                if ctx.functions.contains_key(name) && ctx.lookup(name).is_none() {
+                    return call_user_function(name, arg_values, *line, ctx);
+                }
             }
-
-            let mut frame = HashMap::new();
-            for (p, v) in func.params.iter().zip(arg_values.into_iter()) {
-                frame.insert(p.clone(), v);
-            }
-            ctx.scopes.push(frame);
-            let result = run_block(&func.body, ctx);
-            ctx.scopes.pop();
-
-            match result {
-                Ok(()) => Ok(Value::Nil),
-                Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(deserialize_value(&e.message)),
-                Err(e) => Err(e),
-            }
+            let target = eval_expr(callee, ctx)?;
+            call_value(&target, arg_values, *line, ctx)
         }
         Expr::Binary { op, lhs, rhs, line } => {
-            // Short-circuit `and`/`or` — don't eval rhs unless needed.
             match op {
                 BinOp::And => {
                     let l = eval_expr(lhs, ctx)?;
@@ -525,6 +804,10 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
             let v = eval_expr(expr, ctx)?;
             eval_unary(*op, &v, *line)
         }
+        Expr::Ternary { cond, then_expr, else_expr, line: _ } => {
+            let c = eval_expr(cond, ctx)?;
+            if c.is_truthy() { eval_expr(then_expr, ctx) } else { eval_expr(else_expr, ctx) }
+        }
         Expr::MapLit { entries, line } => {
             let mut map = std::collections::BTreeMap::new();
             for (kex, vex) in entries {
@@ -535,30 +818,120 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
             let _ = line;
             Ok(Value::Map(map))
         }
+        Expr::StructLit { name, fields, line } => {
+            let def = ctx.structs.get(name).cloned()
+                .ok_or_else(|| RuntimeError::new(404, *line, format!("undefined struct `{}`", name)))?;
+            let mut fmap: BTreeMap<String, Value> = BTreeMap::new();
+            for f in &def.fields {
+                fmap.insert(f.clone(), Value::Nil);
+            }
+            for (k, ex) in fields {
+                if !def.fields.iter().any(|f| f == k) {
+                    return Err(RuntimeError::new(400, *line, format!("struct `{}` has no field `{}`", name, k)));
+                }
+                let v = eval_expr(ex, ctx)?;
+                fmap.insert(k.clone(), v);
+            }
+            Ok(Value::Struct { name: name.clone(), fields: fmap })
+        }
         Expr::Index { target, key, line } => {
             let t = eval_expr(target, ctx)?;
             let k = eval_expr(key, ctx)?;
-            match (&t, &k) {
-                (Value::List(items), Value::Int(i)) => {
-                    let n = items.len() as i64;
-                    let idx = if *i < 0 { *i + n } else { *i };
-                    items.get(idx as usize).cloned()
-                        .ok_or_else(|| RuntimeError::new(404, *line, format!("list index out of range: {}", i)))
+            index_into(&t, &k, *line)
+        }
+        Expr::Field { target, name, line } => {
+            let t = eval_expr(target, ctx)?;
+            field_of(&t, name, *line)
+        }
+        Expr::Lambda { params, body, line: _ } => {
+            // Capture the visible scope by snapshotting all currently-bound names.
+            let mut captured: BTreeMap<String, Value> = BTreeMap::new();
+            for scope in &ctx.scopes {
+                for (k, v) in &scope.vars {
+                    captured.insert(k.clone(), v.clone());
                 }
-                (Value::Map(m), _) => {
-                    let key_str = k.as_str();
-                    Ok(m.get(&key_str).cloned().unwrap_or(Value::Nil))
+            }
+            Ok(Value::Lambda { params: params.clone(), body: body.clone(), captured })
+        }
+        Expr::InterpStr { parts, line: _ } => {
+            let mut out = String::new();
+            for p in parts {
+                match p {
+                    InterpPart::Lit(s) => out.push_str(s),
+                    InterpPart::Expr(e) => {
+                        let v = eval_expr(e, ctx)?;
+                        out.push_str(&v.as_str());
+                    }
                 }
-                (Value::Str(s), Value::Int(i)) => {
-                    let chars: Vec<char> = s.chars().collect();
-                    let n = chars.len() as i64;
-                    let idx = if *i < 0 { *i + n } else { *i };
-                    chars.get(idx as usize).map(|c| Value::Str(c.to_string()))
-                        .ok_or_else(|| RuntimeError::new(404, *line, format!("string index out of range: {}", i)))
-                }
-                _ => Err(RuntimeError::new(400, *line, format!("cannot index {:?} by {:?}", t, k))),
+            }
+            Ok(Value::Str(out))
+        }
+    }
+}
+
+/// Call any callable Value: `Lambda` (with captured scope) or anything else fails.
+pub fn call_value(callee: &Value, args: Vec<Value>, line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
+    match callee {
+        Value::Lambda { params, body, captured } => {
+            if args.len() != params.len() {
+                return Err(RuntimeError::new(400, line, format!(
+                    "lambda expects {} arg(s), got {}", params.len(), args.len()
+                )));
+            }
+            let mut frame = Scope::default();
+            for (k, v) in captured { frame.vars.insert(k.clone(), v.clone()); }
+            for (p, v) in params.iter().zip(args.into_iter()) {
+                frame.vars.insert(p.clone(), v);
+            }
+            ctx.scopes.push(frame);
+            let result = run_block(body, ctx);
+            ctx.scopes.pop();
+            match result {
+                Ok(()) => Ok(Value::Nil),
+                Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(deserialize_value(&e.message)),
+                Err(e) => Err(e),
             }
         }
+        other => Err(RuntimeError::new(400, line, format!("not callable: {:?}", other))),
+    }
+}
+
+fn call_user_function(name: &str, arg_values: Vec<Value>, line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
+    let func = ctx.functions.get(name).cloned()
+        .ok_or_else(|| RuntimeError::new(404, line, format!("undefined function `{}`", name)))?;
+
+    let required = func.defaults.iter().filter(|d| d.is_none()).count();
+    if arg_values.len() < required || arg_values.len() > func.params.len() {
+        return Err(RuntimeError::new(400, line, format!(
+            "function `{}` expects {}-{} argument(s), got {}",
+            name, required, func.params.len(), arg_values.len()
+        )));
+    }
+
+    // Evaluate default expressions before pushing the new frame so they see the caller's scope.
+    let mut all_args = arg_values;
+    for i in all_args.len()..func.params.len() {
+        let default_val = match &func.defaults[i] {
+            Some(expr) => eval_expr(expr, ctx)?,
+            None => return Err(RuntimeError::new(400, line, format!(
+                "function `{}`: missing required argument `{}`", name, func.params[i]
+            ))),
+        };
+        all_args.push(default_val);
+    }
+
+    let mut frame = Scope::default();
+    for (p, v) in func.params.iter().zip(all_args.into_iter()) {
+        frame.vars.insert(p.clone(), v);
+    }
+    ctx.scopes.push(frame);
+    let result = run_block(&func.body, ctx);
+    ctx.scopes.pop();
+
+    match result {
+        Ok(()) => Ok(Value::Nil),
+        Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(deserialize_value(&e.message)),
+        Err(e) => Err(e),
     }
 }
 
@@ -578,12 +951,14 @@ fn values_equal(l: &Value, r: &Value) -> bool {
         (Value::Map(a), Value::Map(b)) => {
             a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).map_or(false, |w| values_equal(v, w)))
         }
+        (Value::Struct { name: an, fields: af }, Value::Struct { name: bn, fields: bf }) => {
+            an == bn && af.len() == bf.len() && af.iter().all(|(k, v)| bf.get(k).map_or(false, |w| values_equal(v, w)))
+        }
         _ => false,
     }
 }
 
 fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, RuntimeError> {
-    // Short-circuit logical ops first; these don't coerce to numbers.
     match op {
         BinOp::And => return Ok(Value::Bool(l.is_truthy() && r.is_truthy())),
         BinOp::Or  => return Ok(Value::Bool(l.is_truthy() || r.is_truthy())),
@@ -596,13 +971,26 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, Ru
         if let (Value::Str(a), Value::Str(b)) = (l, r) {
             return Ok(Value::Str(format!("{}{}", a, b)));
         }
-    }
-    if matches!(op, BinOp::Add) {
         if let (Value::List(a), Value::List(b)) = (l, r) {
             let mut joined = a.clone();
             joined.extend(b.iter().cloned());
             return Ok(Value::List(joined));
         }
+    }
+
+    // Bitwise: int-only.
+    if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr) {
+        let li = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bitwise: {:?} is not a number", l)))? as i64;
+        let ri = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bitwise: {:?} is not a number", r)))? as i64;
+        let res = match op {
+            BinOp::BitAnd => li & ri,
+            BinOp::BitOr  => li | ri,
+            BinOp::BitXor => li ^ ri,
+            BinOp::Shl    => li.checked_shl(ri as u32).unwrap_or(0),
+            BinOp::Shr    => li.checked_shr(ri as u32).unwrap_or(0),
+            _ => unreachable!(),
+        };
+        return Ok(Value::Int(res));
     }
 
     let lf = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {:?} as number", l)))?;
@@ -654,6 +1042,10 @@ fn eval_unary(op: UnaryOp, v: &Value, line: usize) -> Result<Value, RuntimeError
             }
         }
         UnaryOp::Not => Ok(Value::Bool(!v.is_truthy())),
+        UnaryOp::BitNot => {
+            let i = v.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bit-not: {:?} is not a number", v)))? as i64;
+            Ok(Value::Int(!i))
+        }
     }
 }
 
