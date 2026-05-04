@@ -56,6 +56,12 @@ const KNOWN: &[&str] = &[
     "len", "split", "join", "contains", "slice", "append", "pop",
     "sorted", "reverse", "upper", "lower", "trim", "replace",
     "map_keys", "map_values", "map_set", "dict",
+    "range", "enumerate", "keys", "values", "zip", "flatten",
+    // filesystem
+    "listdir", "mkdir", "isfile", "isdir",
+    "path_join", "path_basename", "path_dirname", "path_ext",
+    // env
+    "env_get", "env_set",
     // io
     "input",
     // time
@@ -301,6 +307,26 @@ pub fn dispatch(
         "map_values" => collections::map_values(positional, line, ctx),
         "map_set"    => collections::map_set(positional, line, ctx),
         "dict"       => collections::dict(positional, line, ctx),
+        "range"      => collections::range(positional, line, ctx),
+        "enumerate"  => collections::enumerate(positional, line, ctx),
+        "keys"       => collections::keys(positional, line, ctx),
+        "values"     => collections::values(positional, line, ctx),
+        "zip"        => collections::zip(positional, line, ctx),
+        "flatten"    => collections::flatten(positional, line, ctx),
+
+        // ---- filesystem ----
+        "listdir"       => os::listdir(positional, line, ctx),
+        "mkdir"         => os::mkdir(positional, line, ctx),
+        "isfile"        => os::isfile(positional, line, ctx),
+        "isdir"         => os::isdir(positional, line, ctx),
+        "path_join"     => os::path_join(positional, line, ctx),
+        "path_basename" => os::path_basename(positional, line, ctx),
+        "path_dirname"  => os::path_dirname(positional, line, ctx),
+        "path_ext"      => os::path_ext(positional, line, ctx),
+
+        // ---- env ----
+        "env_get"    => os::env_get(positional, line, ctx),
+        "env_set"    => os::env_set(positional, line, ctx),
 
         // ---- io ----
         "input"      => io::input(positional, line, ctx),

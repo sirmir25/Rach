@@ -234,3 +234,102 @@ pub fn dict(_args: &[Value], _line: usize, ctx: &Ctx) -> Result<Value, RuntimeEr
     emit_value(ctx, "dict", &result);
     Ok(result)
 }
+
+pub fn range(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let (start, end, step) = match args.len() {
+        1 => {
+            let n = first(args, line, "range")?.as_f64()
+                .ok_or_else(|| RuntimeError::new(400, line, "range: argument must be a number"))? as i64;
+            (0i64, n, 1i64)
+        }
+        2 | 3 => {
+            let s = first(args, line, "range")?.as_f64()
+                .ok_or_else(|| RuntimeError::new(400, line, "range: start must be a number"))? as i64;
+            let e = nth(args, 1, line, "range")?.as_f64()
+                .ok_or_else(|| RuntimeError::new(400, line, "range: end must be a number"))? as i64;
+            let st = args.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as i64;
+            (s, e, st)
+        }
+        _ => return Err(RuntimeError::new(400, line, "range: requires 1, 2, or 3 arguments")),
+    };
+    if step == 0 { return Err(RuntimeError::new(400, line, "range: step cannot be zero")); }
+    let mut items = Vec::new();
+    let mut i = start;
+    while if step > 0 { i < end } else { i > end } {
+        items.push(Value::Int(i));
+        i += step;
+    }
+    let result = Value::List(items);
+    emit_value(ctx, "range", &result);
+    Ok(result)
+}
+
+pub fn enumerate(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let list = first(args, line, "enumerate")?;
+    let start = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as i64;
+    let items = match list {
+        Value::List(xs) => xs,
+        other => return Err(RuntimeError::new(400, line, format!("enumerate: expected list, got {:?}", other))),
+    };
+    let result = Value::List(
+        items.iter().enumerate()
+            .map(|(i, v)| Value::List(vec![Value::Int(start + i as i64), v.clone()]))
+            .collect()
+    );
+    emit_value(ctx, "enumerate", &result);
+    Ok(result)
+}
+
+pub fn keys(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let m = first(args, line, "keys")?;
+    let result = match m {
+        Value::Map(map) => Value::List(map.keys().map(|k| Value::Str(k.clone())).collect()),
+        Value::Struct { fields, .. } => Value::List(fields.keys().map(|k| Value::Str(k.clone())).collect()),
+        other => return Err(RuntimeError::new(400, line, format!("keys: expected map, got {:?}", other))),
+    };
+    emit_value(ctx, "keys", &result);
+    Ok(result)
+}
+
+pub fn values(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let m = first(args, line, "values")?;
+    let result = match m {
+        Value::Map(map) => Value::List(map.values().cloned().collect()),
+        Value::Struct { fields, .. } => Value::List(fields.values().cloned().collect()),
+        other => return Err(RuntimeError::new(400, line, format!("values: expected map, got {:?}", other))),
+    };
+    emit_value(ctx, "values", &result);
+    Ok(result)
+}
+
+pub fn zip(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    if args.len() < 2 {
+        return Err(RuntimeError::new(400, line, "zip: requires at least 2 lists"));
+    }
+    let lists: Vec<&Vec<Value>> = args.iter().map(|a| match a {
+        Value::List(xs) => Ok(xs),
+        other => Err(RuntimeError::new(400, line, format!("zip: expected list, got {:?}", other))),
+    }).collect::<Result<_, _>>()?;
+    let min_len = lists.iter().map(|l| l.len()).min().unwrap_or(0);
+    let result = Value::List(
+        (0..min_len).map(|i| Value::List(lists.iter().map(|l| l[i].clone()).collect())).collect()
+    );
+    emit_value(ctx, "zip", &result);
+    Ok(result)
+}
+
+pub fn flatten(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let list = first(args, line, "flatten")?;
+    let items = match list {
+        Value::List(xs) => xs,
+        other => return Err(RuntimeError::new(400, line, format!("flatten: expected list, got {:?}", other))),
+    };
+    let result = Value::List(
+        items.iter().flat_map(|v| match v {
+            Value::List(inner) => inner.clone(),
+            other => vec![other.clone()],
+        }).collect()
+    );
+    emit_value(ctx, "flatten", &result);
+    Ok(result)
+}

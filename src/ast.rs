@@ -279,11 +279,16 @@ pub enum Stmt {
         message: Option<Expr>,
         line: usize,
     },
-    /// `for x in <expr>:`
+    /// `for x in <expr>:` or `for i, x in enumerate(list):`
     For {
-        var: String,
+        vars: Vec<String>,
         iter: Expr,
         body: Vec<Stmt>,
+        line: usize,
+    },
+    /// `import "path/to/file.rach"`
+    Import {
+        path: String,
         line: usize,
     },
     /// `bash = generate ...` etc.

@@ -75,6 +75,9 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
     while let Some(tok) = p.peek().cloned() {
         if let Tok::Word(w) = &tok.tok {
             if w == "import" {
+                // peek ahead: if followed by a string literal, leave it for parse_stmt
+                let is_str = matches!(p.peek_at(1).map(|t| &t.tok), Some(Tok::Str(_)));
+                if is_str { break; }
                 p.next();
                 let name_tok = p.next().ok_or_else(|| ParseError::at(Some(&tok), "expected module name"))?;
                 let name = match name_tok.tok {
@@ -451,6 +454,19 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         return Ok(Stmt::While { cond, body, line: head_line });
     }
 
+    if word == "import" {
+        p.next();
+        let path_tok = p.next().ok_or_else(|| ParseError::at(None, "expected path string after `import`"))?;
+        let path = match path_tok.tok {
+            Tok::Str(parts) => parts.into_iter().filter_map(|p| {
+                if let crate::lexer::StrPart::Lit(s) = p { Some(s) } else { None }
+            }).collect::<String>(),
+            _ => return Err(ParseError::at(Some(&path_tok), "import path must be a string literal")),
+        };
+        p.expect_newline()?;
+        return Ok(Stmt::Import { path, line: head_line });
+    }
+
     if word == "break" {
         p.next();
         p.expect_newline()?;
@@ -534,16 +550,26 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
             return Ok(Stmt::CFor { init: init.map(Box::new), cond, step: step.map(Box::new), body, line: head_line });
         }
         let var_tok = p.next().ok_or_else(|| ParseError::at(None, "expected loop variable"))?;
-        let var = match var_tok.tok {
+        let first_var = match var_tok.tok {
             Tok::Word(s) => s,
             _ => return Err(ParseError::at(Some(&var_tok), "expected loop variable")),
         };
+        // tuple unpacking: `for i, item in ...`
+        let mut vars = vec![first_var];
+        while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Comma)) {
+            p.next();
+            let vt = p.next().ok_or_else(|| ParseError::at(None, "expected variable after `,`"))?;
+            match vt.tok {
+                Tok::Word(s) => vars.push(s),
+                _ => return Err(ParseError::at(Some(&vt), "expected variable name")),
+            }
+        }
         p.expect_word("in")?;
         let iter = parse_expr(p)?;
         p.expect_tok(&Tok::Colon, "`:`")?;
         p.expect_newline()?;
         let body = parse_block(p, head_col)?;
-        return Ok(Stmt::For { var, iter, body, line: head_line });
+        return Ok(Stmt::For { vars, iter, body, line: head_line });
     }
 
     if word == "switch" {

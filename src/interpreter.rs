@@ -357,7 +357,7 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             }
             Ok(())
         }
-        Stmt::For { var, iter, body, line } => {
+        Stmt::For { vars, iter, body, line } => {
             let v = eval_expr(iter, ctx)?;
             let items: Vec<Value> = match v {
                 Value::List(xs) => xs,
@@ -370,7 +370,20 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             };
             for item in items {
                 ctx.scopes.push(Scope::default());
-                ctx.set_var(var.clone(), item)?;
+                if vars.len() == 1 {
+                    ctx.set_var(vars[0].clone(), item)?;
+                } else {
+                    // tuple unpacking: item must be a list with enough elements
+                    let parts = match &item {
+                        Value::List(xs) => xs.clone(),
+                        other => return Err(RuntimeError::new(400, *line,
+                            format!("for: tuple unpack expects a list, got {:?}", other))),
+                    };
+                    for (i, vname) in vars.iter().enumerate() {
+                        let val = parts.get(i).cloned().unwrap_or(Value::Nil);
+                        ctx.set_var(vname.clone(), val)?;
+                    }
+                }
                 let res = run_block(body, ctx);
                 ctx.scopes.pop();
                 match res {
@@ -379,6 +392,40 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
                     Err(e) if e.code == CONTINUE_SIGNAL_CODE => continue,
                     Err(e) => return Err(e),
                 }
+            }
+            Ok(())
+        }
+        Stmt::Import { path, line } => {
+            use std::path::Path;
+            let base_path = ctx.script_path.clone();
+            let base = if base_path.is_empty() {
+                std::path::Path::new(".").to_path_buf()
+            } else {
+                std::path::Path::new(&base_path).parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| std::path::Path::new(".").to_path_buf())
+            };
+            let full = base.join(path);
+            let source = std::fs::read_to_string(&full).map_err(|e| {
+                RuntimeError::new(500, *line, format!("import: cannot read `{}`: {}", full.display(), e))
+            })?;
+            let tokens = crate::lexer::tokenize(&source).map_err(|e| {
+                RuntimeError::new(500, *line, format!("import `{}`: lex error: {}", full.display(), e.message))
+            })?;
+            let program = crate::parser::parse(tokens).map_err(|e| {
+                RuntimeError::new(500, *line, format!("import `{}`: parse error: {}", full.display(), e.message))
+            })?;
+            // merge structs and functions into current context
+            for sd in program.structs {
+                ctx.structs.insert(sd.name.clone(), sd);
+            }
+            for f in &program.functions {
+                ctx.functions.insert(f.name.clone(), f.clone());
+            }
+            // run the top-level body of the imported file
+            let main_fn = program.functions.iter().find(|f| f.name == "main").cloned();
+            if let Some(m) = main_fn {
+                run_block(&m.body, ctx)?;
             }
             Ok(())
         }
@@ -718,6 +765,159 @@ fn index_into(t: &Value, k: &Value, line: usize) -> Result<Value, RuntimeError> 
     }
 }
 
+/// Dispatch `obj.method(args)`. Returns `Ok(Some(v))` on hit, `Ok(None)` to fall through.
+fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Option<Value>, RuntimeError> {
+    let result: Option<Value> = match obj {
+        Value::Str(s) => match method {
+            "upper"       => Some(Value::Str(s.to_uppercase())),
+            "lower"       => Some(Value::Str(s.to_lowercase())),
+            "trim"        => Some(Value::Str(s.trim().to_string())),
+            "len"         => Some(Value::Int(s.chars().count() as i64)),
+            "split" => {
+                let sep = args.first().map(|v| v.as_str()).unwrap_or_else(|| " ".into());
+                let parts: Vec<Value> = if sep.is_empty() {
+                    s.chars().map(|c| Value::Str(c.to_string())).collect()
+                } else {
+                    s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect()
+                };
+                Some(Value::List(parts))
+            }
+            "replace" => {
+                let from = args.first().map(|v| v.as_str()).unwrap_or_default();
+                let to   = args.get(1).map(|v| v.as_str()).unwrap_or_default();
+                Some(Value::Str(s.replace(from.as_str(), to.as_str())))
+            }
+            "contains"    => Some(Value::Bool(s.contains(args.first().map(|v| v.as_str()).unwrap_or_default().as_str()))),
+            "starts_with" => Some(Value::Bool(s.starts_with(args.first().map(|v| v.as_str()).unwrap_or_default().as_str()))),
+            "ends_with"   => Some(Value::Bool(s.ends_with(args.first().map(|v| v.as_str()).unwrap_or_default().as_str()))),
+            "find" => {
+                let needle = args.first().map(|v| v.as_str()).unwrap_or_default();
+                Some(match s.find(needle.as_str()) {
+                    Some(i) => Value::Int(s[..i].chars().count() as i64),
+                    None    => Value::Int(-1),
+                })
+            }
+            "chars"  => Some(Value::List(s.chars().map(|c| Value::Str(c.to_string())).collect())),
+            "lines"  => Some(Value::List(s.lines().map(|l| Value::Str(l.to_string())).collect())),
+            "repeat" => {
+                let n = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
+                Some(Value::Str(s.repeat(n)))
+            }
+            "is_empty" => Some(Value::Bool(s.is_empty())),
+            _ => None,
+        },
+        Value::List(items) => match method {
+            "len"      => Some(Value::Int(items.len() as i64)),
+            "is_empty" => Some(Value::Bool(items.is_empty())),
+            "contains" => {
+                let needle = args.first().unwrap_or(&Value::Nil);
+                Some(Value::Bool(items.iter().any(|v| values_equal_pub(v, needle))))
+            }
+            "append" => {
+                let mut new = items.clone();
+                if let Some(v) = args.first() { new.push(v.clone()); }
+                Some(Value::List(new))
+            }
+            "pop" => {
+                let mut new = items.clone();
+                new.pop();
+                Some(Value::List(new))
+            }
+            "reverse" => {
+                let mut new = items.clone();
+                new.reverse();
+                Some(Value::List(new))
+            }
+            "sort" | "sorted" => {
+                let mut new = items.clone();
+                new.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                Some(Value::List(new))
+            }
+            "join" => {
+                let sep = args.first().map(|v| v.as_str()).unwrap_or_default();
+                let s = items.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(sep.as_str());
+                Some(Value::Str(s))
+            }
+            "first" => Some(items.first().cloned().unwrap_or(Value::Nil)),
+            "last"  => Some(items.last().cloned().unwrap_or(Value::Nil)),
+            "slice" => {
+                let start = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
+                let end   = args.get(1).and_then(|v| v.as_f64()).map(|n| n as usize).unwrap_or(items.len());
+                Some(Value::List(items[start.min(items.len())..end.min(items.len())].to_vec()))
+            }
+            "map" => {
+                let f = args.first().cloned().unwrap_or(Value::Nil);
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(call_value(&f, vec![item.clone()], line, ctx)?);
+                }
+                Some(Value::List(out))
+            }
+            "filter" => {
+                let f = args.first().cloned().unwrap_or(Value::Nil);
+                let mut out = Vec::new();
+                for item in items {
+                    if call_value(&f, vec![item.clone()], line, ctx)?.is_truthy() {
+                        out.push(item.clone());
+                    }
+                }
+                Some(Value::List(out))
+            }
+            "reduce" => {
+                let f   = args.first().cloned().unwrap_or(Value::Nil);
+                let init = args.get(1).cloned();
+                let has_init = init.is_some();
+                let mut acc = match init {
+                    Some(v) => v,
+                    None => items.first().cloned().unwrap_or(Value::Nil),
+                };
+                let start = if has_init { 0 } else { 1 };
+                for item in &items[start..] {
+                    acc = call_value(&f, vec![acc, item.clone()], line, ctx)?;
+                }
+                Some(acc)
+            }
+            _ => None,
+        },
+        Value::Map(m) => match method {
+            "len"      => Some(Value::Int(m.len() as i64)),
+            "is_empty" => Some(Value::Bool(m.is_empty())),
+            "keys"     => Some(Value::List(m.keys().map(|k| Value::Str(k.clone())).collect())),
+            "values"   => Some(Value::List(m.values().cloned().collect())),
+            "has" | "contains" => {
+                let key = args.first().map(|v| v.as_str()).unwrap_or_default();
+                Some(Value::Bool(m.contains_key(key.as_str())))
+            }
+            "get" => {
+                let key = args.first().map(|v| v.as_str()).unwrap_or_default();
+                Some(m.get(key.as_str()).cloned().unwrap_or(Value::Nil))
+            }
+            "set" => {
+                let key = args.first().map(|v| v.as_str()).unwrap_or_default();
+                let val = args.get(1).cloned().unwrap_or(Value::Nil);
+                let mut new = m.clone();
+                new.insert(key.to_string(), val);
+                Some(Value::Map(new))
+            }
+            "remove" => {
+                let key = args.first().map(|v| v.as_str()).unwrap_or_default();
+                let mut new = m.clone();
+                new.remove(key.as_str());
+                Some(Value::Map(new))
+            }
+            "items" => {
+                let pairs: Vec<Value> = m.iter()
+                    .map(|(k, v)| Value::List(vec![Value::Str(k.clone()), v.clone()]))
+                    .collect();
+                Some(Value::List(pairs))
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    Ok(result)
+}
+
 fn resolve_segments(segments: &[CallSegment], ctx: &mut Ctx) -> Result<Vec<ResolvedSegment>, RuntimeError> {
     let mut out = Vec::with_capacity(segments.len());
     for seg in segments {
@@ -769,6 +969,13 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
         Expr::CallValue { callee, args, line } => {
             let mut arg_values = Vec::with_capacity(args.len());
             for a in args { arg_values.push(eval_expr(a, ctx)?); }
+            // Method-call syntax: obj.method(args)
+            if let Expr::Field { target, name: method, .. } = callee.as_ref() {
+                let obj = eval_expr(target, ctx)?;
+                if let Some(result) = call_method(&obj, method, &arg_values, *line, ctx)? {
+                    return Ok(result);
+                }
+            }
             // If callee is `Var(name)` and `name` is a known user function, prefer calling
             // it by name (so functions defined later still resolve). Otherwise eval the
             // callee to a Value and call that.
