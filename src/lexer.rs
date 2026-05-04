@@ -205,9 +205,13 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
         }
         if c == '>' { push(&mut tokens, Tok::Gt, line, tok_col); i += 1; col += 1; continue; }
 
-        if c == '"' {
+        // f-string: `f"…{expr}…"` opts in to interpolation. Plain `"…"` is
+        // a literal — embed C, JSON, regex, etc. without escaping `{` / `}`.
+        let is_fstring = c == 'f' && i + 1 < chars.len() && chars[i + 1] == '"';
+        if c == '"' || is_fstring {
             let start_line = line;
             let start_col = tok_col;
+            if is_fstring { i += 1; col += 1; }
             i += 1;
             col += 1;
             let mut parts: Vec<StrPart> = Vec::new();
@@ -228,7 +232,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
                     col += 2;
                     continue;
                 }
-                if chars[i] == '{' {
+                if is_fstring && chars[i] == '{' {
                     if !buf.is_empty() { parts.push(StrPart::Lit(std::mem::take(&mut buf))); }
                     i += 1;
                     col += 1;
@@ -243,7 +247,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
                         i += 1;
                     }
                     if i >= chars.len() {
-                        return Err(LexError { line: start_line, message: "unterminated `{...}` in string".into() });
+                        return Err(LexError { line: start_line, message: "unterminated `{...}` in f-string".into() });
                     }
                     i += 1; // consume `}`
                     col += 1;

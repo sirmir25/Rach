@@ -1,18 +1,21 @@
 # No boilerplate. Top-level statements run in order.
 # Short aliases mirror Unix utilities: read, write, exists, del, run, sh, rm.
 
-print("hello, rach")
+name = "rach"
+print(f"hello, {name}")
 
 write("/tmp/r.txt", "data")
 read("/tmp/r.txt")
 exists("/tmp/r.txt")
 
-# Variables without the `set` keyword
+# Variables without the `set` keyword.
 nums = [3, 1, 4, 1, 5]
+total = 0
 for n in nums:
-    sh("echo iter")
+    total = total + n
+print(f"sum = {total}")
 
-# Native (C/C++) helpers
+# Native (C/C++) helpers.
 native_sort_ints("3,1,4,1,5,9,2,6")
 ascii_banner("OK")
 

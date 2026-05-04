@@ -1,19 +1,12 @@
-// Real browser automation via WebDriver.
-// Requires: chromedriver (or geckodriver/msedgedriver) in PATH.
-//   macOS:   brew install --cask chromedriver
-//   Linux:   apt install chromium-driver
-// Run headless:  RACH_HEADLESS=1 rach examples/webdriver_search.rach
+# Real browser automation via WebDriver.
+# Requires: chromedriver (or geckodriver/msedgedriver) in PATH.
+#   macOS:   brew install --cask chromedriver
+#   Linux:   apt install chromium-driver
+# Run headless:  RACH_HEADLESS=1 rach examples/webdriver_search.rach
 
-import web
-import browser
-
-rach main(0)
-    open in browser("https://duckduckgo.com/")
-    wait seconds(2)
-    fill form id("searchbox_input") value("Rust language")
-    press key("Enter")
-    wait seconds(3)
-    take screenshot("/tmp/rach_ddg.png")
-    completed
-return(end)
-(end0)
+open in browser("https://duckduckgo.com/")
+wait seconds(2)
+fill form id("searchbox_input") value("Rust language")
+press key("Enter")
+wait seconds(3)
+take screenshot("/tmp/rach_ddg.png")

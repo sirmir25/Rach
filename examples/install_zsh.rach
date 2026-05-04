@@ -1,14 +1,8 @@
-import system
-import bash
-import ai
+# OS-aware install with the bash DSL + ai_generate fallback.
 
-rach main(0)
-    if linux:
-        bash = generate install oh my zsh
-        ai_generate(language="bash", task="установить oh-my-zsh на Linux")
-    if macos:
-        bash = generate install oh my zsh
-        ai_generate(language="bash", task="установить oh-my-zsh на macOS")
-    completed
-return(end)
-(end0)
+if linux:
+    bash = generate install oh my zsh
+    ai_generate(language="bash", task="установить oh-my-zsh на Linux")
+if macos:
+    bash = generate install oh my zsh
+    ai_generate(language="bash", task="установить oh-my-zsh на macOS")

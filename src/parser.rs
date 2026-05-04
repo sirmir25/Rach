@@ -93,61 +93,62 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
         break;
     }
 
-    // Top-level: `rach name(...)` defs, `struct` defs, or bare statements
-    // (which get wrapped into an implicit `main`).
-    let starts_with_def = matches!(
-        p.peek().map(|t| t.tok.clone()),
-        Some(Tok::Word(ref w)) if w == "rach" || w == "struct"
-    );
+    // Top-level: `rach name(...)` defs, `struct` defs, and bare statements
+    // can appear in any order. Bare statements are collected, in source order,
+    // into an implicit `main`. Defs at the top level still produce real
+    // functions/structs regardless of where they sit.
+    let mut main_body: Vec<Stmt> = Vec::new();
+    let main_line = p.peek().map(|t| t.line).unwrap_or(1);
+    let mut explicit_main: Option<Function> = None;
 
-    if starts_with_def {
-        loop {
-            p.skip_newlines();
-            let tok = match p.peek() { Some(t) => t.clone(), None => break };
-            match &tok.tok {
-                Tok::Word(w) if w == "rach" => {
-                    let f = parse_function(&mut p)?;
+    loop {
+        p.skip_newlines();
+        let tok = match p.peek() { Some(t) => t.clone(), None => break };
+        match &tok.tok {
+            Tok::Word(w) if w == "rach" => {
+                let f = parse_function(&mut p)?;
+                if f.name == "main" && f.params.is_empty() && explicit_main.is_none() && main_body.is_empty() {
+                    explicit_main = Some(f);
+                } else {
                     functions.push(f);
                 }
-                Tok::Word(w) if w == "struct" => {
-                    let s = parse_struct(&mut p)?;
-                    structs.push(s);
-                }
-                _ => return Err(ParseError::at(Some(&tok), format!("expected `rach`, `struct`, or `import`, got `{:?}`", tok.tok))),
+            }
+            Tok::Word(w) if w == "struct" => {
+                let s = parse_struct(&mut p)?;
+                structs.push(s);
+            }
+            _ => {
+                let stmt = parse_stmt(&mut p)?;
+                main_body.push(stmt);
             }
         }
-    } else {
-        let mut main_body: Vec<Stmt> = Vec::new();
-        let main_line = p.peek().map(|t| t.line).unwrap_or(1);
-        loop {
-            p.skip_newlines();
-            let tok = match p.peek() { Some(t) => t.clone(), None => break };
-            if matches!(&tok.tok, Tok::Word(w) if w == "rach" || w == "struct") { break; }
-            let stmt = parse_stmt(&mut p)?;
-            main_body.push(stmt);
+    }
+
+    if let Some(f) = explicit_main {
+        if main_body.is_empty() {
+            functions.insert(0, f);
+        } else {
+            // Both an explicit `rach main():` and bare statements — append the
+            // explicit body to the bare statements so users can extend `main`
+            // either way without surprises.
+            let mut merged = main_body;
+            merged.extend(f.body);
+            functions.insert(0, Function {
+                name: "main".to_string(),
+                params: Vec::new(),
+                defaults: Vec::new(),
+                body: merged,
+                line: f.line,
+            });
         }
-        functions.push(Function {
+    } else if !main_body.is_empty() || functions.is_empty() {
+        functions.insert(0, Function {
             name: "main".to_string(),
             params: Vec::new(),
             defaults: Vec::new(),
             body: main_body,
             line: main_line,
         });
-        loop {
-            p.skip_newlines();
-            let tok = match p.peek() { Some(t) => t.clone(), None => break };
-            match &tok.tok {
-                Tok::Word(w) if w == "rach" => {
-                    let f = parse_function(&mut p)?;
-                    functions.push(f);
-                }
-                Tok::Word(w) if w == "struct" => {
-                    let s = parse_struct(&mut p)?;
-                    structs.push(s);
-                }
-                _ => return Err(ParseError::at(Some(&tok), format!("expected `rach`, `struct`, or end of file, got `{:?}`", tok.tok))),
-            }
-        }
     }
 
     Ok(Program { imports, functions, structs })
