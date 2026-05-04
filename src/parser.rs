@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use crate::ast::{
-    AssignTarget, BashAction, BinOp, CallSegment, Expr, Function, InterpPart, Program, Stmt,
-    StructDef, UnaryOp, Value,
+    AssignTarget, BashAction, BinOp, CallSegment, Expr, Function, InterpPart, MatchArm,
+    MatchPattern, Program, Stmt, StructDef, UnaryOp, Value,
 };
 use crate::lexer::{StrPart, Tok, Token};
 
@@ -352,6 +352,108 @@ fn parse_cfor_mini_stmt(p: &mut P) -> Result<Option<Stmt>, ParseError> {
     }
 }
 
+/// Parse `pat | pat | …`
+fn parse_match_pattern_or(p: &mut P) -> Result<MatchPattern, ParseError> {
+    let first = parse_match_pattern_atom(p)?;
+    if !matches!(p.peek().map(|t| &t.tok), Some(Tok::Pipe)) {
+        return Ok(first);
+    }
+    let mut alts = vec![first];
+    while matches!(p.peek().map(|t| &t.tok), Some(Tok::Pipe)) {
+        p.next();
+        alts.push(parse_match_pattern_atom(p)?);
+    }
+    Ok(MatchPattern::Or(alts))
+}
+
+/// Parse a single pattern atom (no `|`).
+fn parse_match_pattern_atom(p: &mut P) -> Result<MatchPattern, ParseError> {
+    let tok = p.peek().cloned().ok_or_else(|| ParseError::at(None, "expected pattern"))?;
+
+    // `[` — list destructure
+    if matches!(&tok.tok, Tok::LBracket) {
+        p.next();
+        let mut items: Vec<MatchPattern> = Vec::new();
+        let mut rest: Option<String> = None;
+        loop {
+            p.skip_newlines();
+            match p.peek().map(|t| t.tok.clone()) {
+                Some(Tok::RBracket) => { p.next(); break; }
+                Some(Tok::Comma) => { p.next(); continue; }
+                Some(Tok::DotDot) => {
+                    p.next();
+                    // optional binding name after `..`
+                    let name = if let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
+                        if w != "," && w != "]" { p.next(); Some(w) } else { None }
+                    } else { None };
+                    rest = Some(name.unwrap_or_default());
+                    p.skip_newlines();
+                    if matches!(p.peek().map(|t| &t.tok), Some(Tok::RBracket)) { p.next(); }
+                    break;
+                }
+                None | Some(Tok::Colon) => break,
+                _ => items.push(parse_match_pattern_atom(p)?),
+            }
+        }
+        return Ok(MatchPattern::List { items, rest });
+    }
+
+    // Negate prefix for negative numbers
+    let negative = matches!(&tok.tok, Tok::Minus);
+    if negative { p.next(); }
+
+    let tok2 = p.peek().cloned().ok_or_else(|| ParseError::at(None, "expected pattern"))?;
+
+    let base_val = match &tok2.tok {
+        Tok::Int(n) => { let v = if negative { Value::Int(-n) } else { Value::Int(*n) }; p.next(); v }
+        Tok::Float(f) => { let v = if negative { Value::Float(-f) } else { Value::Float(*f) }; p.next(); v }
+        Tok::Str(parts) => {
+            if negative { return Err(ParseError::at(Some(&tok2), "cannot negate string pattern")); }
+            let s: String = parts.iter().filter_map(|part| {
+                if let StrPart::Lit(s) = part { Some(s.clone()) } else { None }
+            }).collect();
+            p.next();
+            Value::Str(s)
+        }
+        Tok::Word(w) => {
+            match w.as_str() {
+                "_" => { p.next(); return Ok(MatchPattern::Wildcard); }
+                "true" => { p.next(); Value::Bool(true) }
+                "false" => { p.next(); Value::Bool(false) }
+                "nil" => { p.next(); Value::Nil }
+                name => {
+                    // Check if it's a binding (bare word, not followed by `..`)
+                    let name = name.to_string();
+                    p.next();
+                    // Could still be a range start if the base is a word that looks like a var,
+                    // but we can't know. Treat as binding.
+                    return Ok(MatchPattern::Bind(name));
+                }
+            }
+        }
+        _ => return Err(ParseError::at(Some(&tok2), "expected pattern")),
+    };
+
+    // Check for range: `val..expr` or `val..=expr`
+    let inclusive = match p.peek().map(|t| t.tok.clone()) {
+        Some(Tok::DotDot) => { p.next(); false }
+        Some(Tok::DotDotEq) => { p.next(); true }
+        _ => return Ok(MatchPattern::Literal(base_val)),
+    };
+
+    // Parse hi value (must be a literal)
+    let hi_negative = matches!(p.peek().map(|t| &t.tok), Some(Tok::Minus));
+    if hi_negative { p.next(); }
+    let hi_tok = p.peek().cloned().ok_or_else(|| ParseError::at(None, "expected range end"))?;
+    let hi_val = match &hi_tok.tok {
+        Tok::Int(n) => { let v = if hi_negative { Value::Int(-n) } else { Value::Int(*n) }; p.next(); v }
+        Tok::Float(f) => { let v = if hi_negative { Value::Float(-f) } else { Value::Float(*f) }; p.next(); v }
+        _ => return Err(ParseError::at(Some(&hi_tok), "expected numeric range end")),
+    };
+
+    Ok(MatchPattern::Range { lo: base_val, hi: hi_val, inclusive })
+}
+
 fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
     let head = p.peek().cloned().ok_or_else(|| ParseError::at(None, "unexpected end of input"))?;
     let head_col = head.col;
@@ -605,6 +707,43 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
             }
         }
         return Ok(Stmt::Switch { expr, cases, default, line: head_line });
+    }
+
+    if word == "match" {
+        p.next();
+        let expr = parse_expr(p)?;
+        p.expect_tok(&Tok::Colon, "`:`")?;
+        p.expect_newline()?;
+        let mut arms: Vec<MatchArm> = Vec::new();
+        loop {
+            p.skip_newlines();
+            let next = match p.peek() { Some(t) => t.clone(), None => break };
+            if next.col <= head_col { break; }
+            let kw = match &next.tok { Tok::Word(w) => w.clone(), _ => break };
+            if kw != "case" && kw != "default" { break; }
+            if kw == "default" {
+                p.next();
+                p.expect_tok(&Tok::Colon, "`:`")?;
+                p.expect_newline()?;
+                let body = parse_block(p, next.col)?;
+                arms.push(MatchArm { pattern: MatchPattern::Wildcard, guard: None, body });
+                continue;
+            }
+            // `case`
+            p.next();
+            let pattern = parse_match_pattern_or(p)?;
+            let guard = if matches!(p.peek().map(|t| &t.tok), Some(Tok::Word(w)) if w == "if") {
+                p.next();
+                Some(parse_expr(p)?)
+            } else {
+                None
+            };
+            p.expect_tok(&Tok::Colon, "`:`")?;
+            p.expect_newline()?;
+            let body = parse_block(p, next.col)?;
+            arms.push(MatchArm { pattern, guard, body });
+        }
+        return Ok(Stmt::Match { expr, arms, line: head_line });
     }
 
     if word == "do" {

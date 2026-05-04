@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ast::{
-    AssignTarget, BashAction, BinOp, CallSegment, Expr, Function, InterpPart, Program, Stmt,
-    StructDef, UnaryOp, Value,
+    AssignTarget, BashAction, BinOp, CallSegment, Expr, Function, InterpPart, MatchPattern,
+    Program, Stmt, StructDef, UnaryOp, Value,
 };
 use crate::stdlib;
 use crate::stdlib::logging::LogState;
@@ -612,6 +612,77 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             }
             ctx.scopes.pop();
             Ok(())
+        }
+        Stmt::Match { expr, arms, line } => {
+            let val = eval_expr(expr, ctx)?;
+            for arm in arms {
+                let mut bindings: HashMap<String, Value> = HashMap::new();
+                if match_pattern(&arm.pattern, &val, &mut bindings) {
+                    ctx.scopes.push(Scope::default());
+                    for (k, v) in bindings {
+                        ctx.set_var(k, v)?;
+                    }
+                    // evaluate guard with bindings in scope
+                    let guard_ok = match &arm.guard {
+                        None => true,
+                        Some(g) => eval_expr(g, ctx)?.is_truthy(),
+                    };
+                    if guard_ok {
+                        let res = run_block(&arm.body, ctx);
+                        ctx.scopes.pop();
+                        match res {
+                            Ok(()) => {}
+                            Err(e) if e.code == BREAK_SIGNAL_CODE => {}
+                            Err(e) => return Err(e),
+                        }
+                        return Ok(());
+                    }
+                    ctx.scopes.pop();
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Returns true if `val` matches `pattern`, and populates `bindings`.
+fn match_pattern(pat: &MatchPattern, val: &Value, bindings: &mut HashMap<String, Value>) -> bool {
+    match pat {
+        MatchPattern::Wildcard => true,
+        MatchPattern::Bind(name) => {
+            bindings.insert(name.clone(), val.clone());
+            true
+        }
+        MatchPattern::Literal(lit) => values_equal(val, lit),
+        MatchPattern::Range { lo, hi, inclusive } => {
+            let v = match val.as_f64() { Some(f) => f, None => return false };
+            let l = match lo.as_f64() { Some(f) => f, None => return false };
+            let h = match hi.as_f64() { Some(f) => f, None => return false };
+            if *inclusive { v >= l && v <= h } else { v >= l && v < h }
+        }
+        MatchPattern::Or(alts) => {
+            alts.iter().any(|a| {
+                let mut tmp = HashMap::new();
+                if match_pattern(a, val, &mut tmp) { bindings.extend(tmp); true } else { false }
+            })
+        }
+        MatchPattern::List { items, rest } => {
+            let elems = match val {
+                Value::List(xs) => xs,
+                _ => return false,
+            };
+            if rest.is_none() && elems.len() != items.len() { return false; }
+            if rest.is_some() && elems.len() < items.len() { return false; }
+            for (i, item_pat) in items.iter().enumerate() {
+                if !match_pattern(item_pat, &elems[i], bindings) { return false; }
+            }
+            if let Some(rest_name) = rest {
+                let tail = Value::List(elems[items.len()..].to_vec());
+                if !rest_name.is_empty() {
+                    bindings.insert(rest_name.clone(), tail);
+                }
+            }
+            true
         }
     }
 }

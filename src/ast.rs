@@ -332,6 +332,37 @@ pub enum Stmt {
         body: Vec<Stmt>,
         line: usize,
     },
+    /// Rust-style `match expr:  case pat [if guard]: body ...`
+    Match {
+        expr: Expr,
+        arms: Vec<MatchArm>,
+        line: usize,
+    },
+}
+
+/// One arm of a `match` statement.
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub guard: Option<Expr>,
+    pub body: Vec<Stmt>,
+}
+
+/// Pattern for `match` arms.
+#[derive(Debug, Clone)]
+pub enum MatchPattern {
+    /// `_` — discard, always matches.
+    Wildcard,
+    /// Single bare word: `x` — binds matched value to variable.
+    Bind(String),
+    /// Literal: int / float / string / bool / nil.
+    Literal(Value),
+    /// `lo..hi` (exclusive) or `lo..=hi` (inclusive).
+    Range { lo: Value, hi: Value, inclusive: bool },
+    /// `pat1 | pat2 | …` — matches if any alternative matches.
+    Or(Vec<MatchPattern>),
+    /// `[p0, p1, …]` — list destructure; `rest=true` means last element is `..name`.
+    List { items: Vec<MatchPattern>, rest: Option<String> },
 }
 
 #[derive(Debug, Clone)]

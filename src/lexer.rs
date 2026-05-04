@@ -47,6 +47,10 @@ pub enum Tok {
     CaretCaret,
     ColonColon,
     Arrow,
+    /// `..`
+    DotDot,
+    /// `..=`
+    DotDotEq,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,7 +122,15 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
         if c == '}' { push(&mut tokens, Tok::RBrace, line, tok_col); i += 1; col += 1; continue; }
         if c == ',' { push(&mut tokens, Tok::Comma,  line, tok_col); i += 1; col += 1; continue; }
         if c == ';' { push(&mut tokens, Tok::Semicolon, line, tok_col); i += 1; col += 1; continue; }
-        if c == '.' { push(&mut tokens, Tok::Dot, line, tok_col); i += 1; col += 1; continue; }
+        if c == '.' {
+            if i + 2 < chars.len() && chars[i+1] == '.' && chars[i+2] == '=' {
+                push(&mut tokens, Tok::DotDotEq, line, tok_col); i += 3; col += 3; continue;
+            }
+            if i + 1 < chars.len() && chars[i+1] == '.' {
+                push(&mut tokens, Tok::DotDot, line, tok_col); i += 2; col += 2; continue;
+            }
+            push(&mut tokens, Tok::Dot, line, tok_col); i += 1; col += 1; continue;
+        }
         if c == '?' { push(&mut tokens, Tok::Question, line, tok_col); i += 1; col += 1; continue; }
         if c == '~' { push(&mut tokens, Tok::Tilde, line, tok_col); i += 1; col += 1; continue; }
         if c == '&' { push(&mut tokens, Tok::Amp, line, tok_col); i += 1; col += 1; continue; }
