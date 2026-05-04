@@ -86,14 +86,15 @@ log_filter("warn")
 
 Big monospace block with one-tab-each. Each tab uses **only the snippet from `INSTALL_SNIPPETS.md`** that matches it. Tabs in this order:
 
-1. macOS / Linux (bash)
-2. Windows (cmd)
-3. Cross-platform (Python)
-4. C99
-5. C++17
+1. One-liner — macOS / Linux (`curl … | bash`)
+2. One-liner — Windows (`iwr … | iex`)
+3. From a checkout (bash)
+4. Windows (cmd.exe)
+5. Cross-platform (Python)
+6. C99 / C++17
 
 Below the tabs, a short note:
-> *Each installer just runs `cargo build --release` and copies the binary to a system path. Requires Rust toolchain — get it from rustup.rs.*
+> *Every installer downloads a pre-built, statically-linked binary from GitHub Releases — Linux (x86_64/aarch64, musl), macOS (x86_64/aarch64), Windows (x86_64). No Rust toolchain needed, no runtime dependencies.*
 
 ### 6. REPL teaser
 

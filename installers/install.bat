@@ -1,58 +1,26 @@
 @echo off
-rem Rach installer for Windows (cmd.exe).
-rem Usage: installers\install.bat [INSTALL_DIR]
-rem Default INSTALL_DIR = %ProgramFiles%\rach
-rem Run from an Administrator cmd if writing to Program Files.
+rem Rach installer for Windows (cmd.exe). Delegates to install.ps1 — downloads a
+rem pre-built binary from GitHub Releases. No Rust toolchain required.
+rem
+rem Usage:
+rem   installers\install.bat [INSTALL_DIR]
+rem
+rem Default INSTALL_DIR = %LOCALAPPDATA%\Programs\rach (no Administrator needed).
 
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal EnableExtensions
 
-set "REPO_ROOT=%~dp0.."
-pushd "%REPO_ROOT%" >nul
+set "SCRIPT_DIR=%~dp0"
+set "PS_SCRIPT=%SCRIPT_DIR%install.ps1"
 
-if "%~1"=="" (
-    set "INSTALL_DIR=%ProgramFiles%\rach"
+if not exist "%PS_SCRIPT%" (
+    echo [xx] %PS_SCRIPT% not found 1>&2
+    exit /b 1
+)
+
+if not "%~1"=="" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" -InstallDir "%~1"
 ) else (
-    set "INSTALL_DIR=%~1"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%"
 )
 
-where cargo >nul 2>&1
-if errorlevel 1 (
-    echo [xx] cargo not found in PATH. Install Rust from https://rustup.rs 1>&2
-    popd >nul & exit /b 1
-)
-
-echo ==^> Building Rach (release)...
-cargo build --release
-if errorlevel 1 (
-    echo [xx] build failed 1>&2
-    popd >nul & exit /b 1
-)
-
-set "SRC_BIN=%REPO_ROOT%\target\release\rach.exe"
-if not exist "%SRC_BIN%" (
-    echo [xx] build did not produce %SRC_BIN% 1>&2
-    popd >nul & exit /b 1
-)
-
-echo ==^> Installing to %INSTALL_DIR%\rach.exe
-if not exist "%INSTALL_DIR%" (
-    mkdir "%INSTALL_DIR%" 2>nul
-    if errorlevel 1 (
-        echo [xx] cannot create %INSTALL_DIR% — try running as Administrator 1>&2
-        popd >nul & exit /b 1
-    )
-)
-copy /Y "%SRC_BIN%" "%INSTALL_DIR%\rach.exe" >nul
-if errorlevel 1 (
-    echo [xx] copy failed — try running as Administrator 1>&2
-    popd >nul & exit /b 1
-)
-
-echo ==^> Verifying...
-"%INSTALL_DIR%\rach.exe" version
-echo.
-echo Installed. Add %INSTALL_DIR% to PATH if it is not already there.
-echo Try:  rach examples\hello.rach
-
-popd >nul
-endlocal
+exit /b %ERRORLEVEL%

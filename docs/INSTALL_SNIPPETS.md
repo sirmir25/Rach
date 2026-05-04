@@ -1,10 +1,38 @@
 # Install Snippets
 
-Copy-paste ready blocks for the install section of the website. Each block is what the user actually pastes into their terminal. Show them in tabs, in this order. Every snippet assumes the user has already run `git clone https://github.com/sirmir25/Rach.git && cd Rach` (the very first tab makes that explicit; later tabs can omit it).
+Copy-paste ready blocks for the install section of the website. **No Rust toolchain required** — every installer downloads a pre-built binary from GitHub Releases. Show them in tabs, in this order.
 
 ---
 
-## Tab 1 — macOS / Linux / BSD (bash)
+## Tab 1 — One-liner (macOS / Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sirmir25/Rach/main/installers/install.sh | bash
+```
+
+Custom prefix:
+```bash
+curl -fsSL https://raw.githubusercontent.com/sirmir25/Rach/main/installers/install.sh | bash -s -- /opt
+```
+
+Pin a version:
+```bash
+curl -fsSL https://raw.githubusercontent.com/sirmir25/Rach/main/installers/install.sh | RACH_VERSION=v0.2.0 bash
+```
+
+---
+
+## Tab 2 — One-liner (Windows / PowerShell)
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/sirmir25/Rach/main/installers/install.ps1 | iex
+```
+
+Default install dir is `%LOCALAPPDATA%\Programs\rach` — no Administrator required, and the script adds it to your user `PATH`.
+
+---
+
+## Tab 3 — From a checkout (bash)
 
 ```bash
 git clone https://github.com/sirmir25/Rach.git
@@ -19,7 +47,7 @@ Custom prefix:
 
 ---
 
-## Tab 2 — Windows (cmd.exe, run as Administrator)
+## Tab 4 — Windows (cmd.exe)
 
 ```bat
 git clone https://github.com/sirmir25/Rach.git
@@ -34,7 +62,7 @@ installers\install.bat "C:\Tools\rach"
 
 ---
 
-## Tab 3 — Cross-platform (Python 3)
+## Tab 5 — Cross-platform (Python 3)
 
 ```bash
 python3 installers/install.py
@@ -49,24 +77,16 @@ python3 installers/install.py /opt
 python3 installers\install.py "C:\Tools\rach"
 ```
 
+Uses only the Python standard library — no `pip install` step.
+
 ---
 
-## Tab 4 — C99 (any POSIX or MSVC)
+## Tab 6 — C99 / C++17 (any POSIX or MSVC)
 
 ```bash
 cc installers/install.c -o /tmp/rach-install
 /tmp/rach-install
 ```
-
-Windows MSVC:
-```bat
-cl installers\install.c /Fe:rach-install.exe
-rach-install.exe
-```
-
----
-
-## Tab 5 — C++17
 
 ```bash
 c++ -std=c++17 installers/install.cpp -o /tmp/rach-install
@@ -75,9 +95,11 @@ c++ -std=c++17 installers/install.cpp -o /tmp/rach-install
 
 Windows MSVC:
 ```bat
-cl /std:c++17 installers\install.cpp /Fe:rach-install.exe
-rach-install.exe
+cl installers\install.c /Fe:rach-install.exe && rach-install.exe
+cl /std:c++17 installers\install.cpp /Fe:rach-install.exe && rach-install.exe
 ```
+
+These shell out to system `curl` (POSIX) or `Invoke-WebRequest` (Windows) for the download.
 
 ---
 
@@ -104,6 +126,6 @@ rach examples/short.rach
 
 ## Prerequisites note (sidebar copy)
 
-> All five installers do the same thing: build the interpreter from source via `cargo build --release` and copy the resulting binary to a system path. They require the Rust toolchain — install from <https://rustup.rs>.
+> Every installer downloads a pre-built, statically-linked binary from GitHub Releases for your platform — Linux (x86_64/aarch64, musl), macOS (x86_64/aarch64), and Windows (x86_64). No Rust toolchain is needed, and the binary has no runtime dependencies.
 >
-> Once installed, **the binary has no runtime dependencies**. End users never need Rust to run `.rach` scripts.
+> If you're on a platform we don't ship a binary for, set `RACH_FROM_SOURCE=1` to build via `cargo` instead (requires the Rust toolchain from <https://rustup.rs>).

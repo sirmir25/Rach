@@ -32,7 +32,21 @@ Rach is a small scripting language focused on automation: system commands, files
 
 ## Installation
 
-Requires Rust 1.70+ and `cargo`. Pick whichever installer matches your environment — all five do the same thing (build `--release`, copy to a system path, verify):
+**No Rust toolchain required.** The installers download a pre-built binary from GitHub Releases for your platform.
+
+One-liners:
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/sirmir25/Rach/main/installers/install.sh | bash
+```
+
+```powershell
+# Windows (PowerShell)
+iwr -useb https://raw.githubusercontent.com/sirmir25/Rach/main/installers/install.ps1 | iex
+```
+
+From a checkout — pick whichever installer matches your environment:
 
 ```bash
 git clone https://github.com/sirmir25/Rach.git
@@ -41,10 +55,10 @@ cd Rach
 # Linux / macOS / BSD
 ./installers/install.sh
 
-# Windows (cmd.exe, run as Administrator if writing to Program Files)
+# Windows (cmd.exe — defaults to %LOCALAPPDATA%\Programs\rach, no Admin needed)
 installers\install.bat
 
-# Cross-platform (Python 3)
+# Cross-platform (Python 3, no extra deps)
 python3 installers/install.py
 
 # Cross-platform (C99 or C++17)
@@ -52,15 +66,19 @@ cc installers/install.c -o /tmp/ri && /tmp/ri
 c++ -std=c++17 installers/install.cpp -o /tmp/ri && /tmp/ri
 ```
 
-Each installer takes an optional install dir as its first argument. See [`installers/README.md`](installers/README.md) for details.
+Each installer takes an optional install dir as its first argument. Pin a specific version with `RACH_VERSION=v0.2.0`. See [`installers/README.md`](installers/README.md) for details.
 
-Manual build (no installer):
+Pre-built archives are published for `x86_64`/`aarch64` Linux (musl), `x86_64`/`aarch64` macOS, and `x86_64` Windows.
+
+Building from source (only if you want to hack on the interpreter, or you're on a platform we don't ship binaries for):
 
 ```bash
 cargo build --release
 sudo ln -s "$PWD/target/release/rach" /usr/local/bin/rach
 rach version
 ```
+
+Or force any installer to build from source: `RACH_FROM_SOURCE=1 ./installers/install.sh`.
 
 For browser automation you also need one of:
 - Chrome or Chromium (then `chromedriver` is downloaded automatically)
@@ -442,12 +460,12 @@ error 409 string 12
 
 ## Building from source
 
+End users don't need this — pre-built binaries are published on every release. Build from source only if you're hacking on the interpreter or running on a platform we don't ship a binary for.
+
 ```bash
 cargo build --release
 ./target/release/rach examples/hello.rach
 ```
-
-Dependencies: only `serde_json`. Everything else — `std`.
 
 Cross-compilation:
 
@@ -457,6 +475,8 @@ cargo build --release --target x86_64-unknown-linux-musl
 ```
 
 You get a statically-linked binary that runs on any Linux without glibc concerns.
+
+Releases are produced by the GitHub Actions workflow at `.github/workflows/release.yml` — push a `vX.Y.Z` tag and the matrix builds and uploads archives for all supported targets.
 
 ---
 
