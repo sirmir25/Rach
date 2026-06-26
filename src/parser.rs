@@ -1090,7 +1090,7 @@ fn parse_optional_else(p: &mut P, cond_col: usize) -> Result<Option<Vec<Stmt>>, 
 /// Expression precedence (low to high):
 ///   ternary → or → and → not → comparison → bit-or → bit-xor → bit-and
 ///   → shift → add/sub → mul/div/mod → power (right-assoc) → unary → postfix → primary.
-pub(crate) fn parse_expr(p: &mut P) -> Result<Expr, ParseError> {
+fn parse_expr(p: &mut P) -> Result<Expr, ParseError> {
     parse_ternary(p)
 }
 
