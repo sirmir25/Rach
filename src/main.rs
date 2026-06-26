@@ -110,6 +110,18 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // Run everything on a worker thread with a large stack. The tree-walking interpreter
+    // recurses once per Rach call frame, so the default ~8 MiB main-thread stack would cap
+    // legitimate recursion far too low; the interpreter's own depth guard handles true runaway.
+    std::thread::Builder::new()
+        .stack_size(rach::INTERP_STACK_SIZE)
+        .spawn(real_main)
+        .expect("spawn interpreter thread")
+        .join()
+        .unwrap_or(ExitCode::FAILURE)
+}
+
+fn real_main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {

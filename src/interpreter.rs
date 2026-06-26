@@ -139,9 +139,9 @@ const CONTINUE_SIGNAL_CODE: i64 = -3;
 
 /// Maximum depth of nested user-function calls. Runaway recursion (`rach f(): f()`) would
 /// otherwise overflow the native stack and abort the process; this turns it into a catchable
-/// runtime error. Each Rach frame costs far more native stack than a parser frame, so the
-/// limit is lower than [`crate::parser`]'s.
-const MAX_CALL_DEPTH: usize = 128;
+/// runtime error. Sized to stay within [`crate::INTERP_STACK_SIZE`], the stack the CLI gives
+/// the interpreter thread.
+const MAX_CALL_DEPTH: usize = 2000;
 
 fn return_signal(value: Value) -> RuntimeError {
     RuntimeError { code: RETURN_SIGNAL_CODE, line: 0, message: serialize_value(&value) }

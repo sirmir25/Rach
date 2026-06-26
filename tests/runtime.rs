@@ -9,7 +9,7 @@ use rach::{interpreter, lexer, parser};
 fn run(src: &str) -> Result<(), (i64, String)> {
     let owned = src.to_string();
     std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(rach::INTERP_STACK_SIZE)
         .spawn(move || {
             let tokens = lexer::tokenize(&owned).map_err(|e| (e.line as i64, e.message))?;
             let program = parser::parse(tokens).map_err(|e| (e.line as i64, e.message))?;
