@@ -49,8 +49,8 @@ const KNOWN: &[&str] = &[
     "abs", "floor", "ceil", "round",
     "min", "max", "sum", "avg",
     "radians", "degrees", "pi", "e",
-    // logging
-    "log", "log_debug", "log_info", "log_warn", "log_error",
+    // logging  (NB: bare `log` is math's natural log, above)
+    "log_message", "log_debug", "log_info", "log_warn", "log_error",
     "log_level", "log_to", "log_history", "log_filter", "log_count", "log_clear",
     // collections (string/list/map)
     "len", "split", "join", "contains", "slice", "append", "pop",
@@ -277,7 +277,8 @@ pub fn dispatch(
         "e"       => math::e_const(positional, line, ctx),
 
         // ---- logging ----
-        "log"         => logging::log(positional, line, ctx),
+        // NB: `log` is math's natural logarithm; the level-tagged logger is `log_message`.
+        "log_message" => logging::log(positional, line, ctx),
         "log_debug"   => logging::log_debug(positional, line, ctx),
         "log_info"    => logging::log_info(positional, line, ctx),
         "log_warn"    => logging::log_warn(positional, line, ctx),

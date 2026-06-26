@@ -216,7 +216,7 @@ Inputs in radians for trig.
 | `log_info(msg, ...)`      | Emit at `info` level                                                                             |
 | `log_warn(msg, ...)`      | Emit at `warn` level                                                                             |
 | `log_error(msg, ...)`     | Emit at `error` level                                                                            |
-| `log(level, msg, ...)`    | Emit by name                                                                                     |
+| `log_message(level, msg, ...)` | Emit at a named level (note: bare `log` is math's natural log)                               |
 | `log_level(level)`        | Set or query minimum level (`debug` < `info` < `warn` < `error` < `off`)                         |
 | `log_to(path)` / `log_to()` | Mirror entries to file / disable                                                              |
 | `log_history()`           | Return `List` of formatted entries                                                               |
