@@ -1,9 +1,4 @@
-mod ast;
-mod lexer;
-mod parser;
-mod interpreter;
-mod repl;
-mod stdlib;
+use rach::{interpreter, lexer, parser, repl};
 
 use std::env;
 use std::fs;
@@ -47,7 +42,7 @@ fn resolve_script_path(path: &str) -> Option<String> {
     candidates.into_iter().find(|p| Path::new(p).is_file())
 }
 
-use interpreter::report_pretty;
+use rach::interpreter::report_pretty;
 
 fn run_file(path: &str, check_only: bool) -> ExitCode {
     let resolved = resolve_script_path(path);
