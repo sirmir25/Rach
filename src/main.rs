@@ -1,9 +1,4 @@
-mod ast;
-mod lexer;
-mod parser;
-mod interpreter;
-mod repl;
-mod stdlib;
+use rach::{interpreter, lexer, parser, repl};
 
 use std::env;
 use std::fs;
@@ -47,7 +42,7 @@ fn resolve_script_path(path: &str) -> Option<String> {
     candidates.into_iter().find(|p| Path::new(p).is_file())
 }
 
-use interpreter::report_pretty;
+use rach::interpreter::report_pretty;
 
 fn run_file(path: &str, check_only: bool) -> ExitCode {
     let resolved = resolve_script_path(path);
@@ -115,6 +110,18 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // Run everything on a worker thread with a large stack. The tree-walking interpreter
+    // recurses once per Rach call frame, so the default ~8 MiB main-thread stack would cap
+    // legitimate recursion far too low; the interpreter's own depth guard handles true runaway.
+    std::thread::Builder::new()
+        .stack_size(rach::INTERP_STACK_SIZE)
+        .spawn(real_main)
+        .expect("spawn interpreter thread")
+        .join()
+        .unwrap_or(ExitCode::FAILURE)
+}
+
+fn real_main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {

@@ -19,13 +19,32 @@ impl ParseError {
     }
 }
 
+/// Maximum recursion depth for nested expressions and blocks. Adversarial input such as
+/// thousands of nested parentheses would otherwise overflow the native stack and abort the
+/// process (SIGABRT) instead of producing a diagnostic. The native stack tolerates far more
+/// than this; the limit is deliberately conservative so the error fires first.
+const MAX_PARSE_DEPTH: usize = 128;
+
 struct P {
     tokens: Vec<Token>,
     pos: usize,
+    depth: usize,
 }
 
 impl P {
-    fn new(tokens: Vec<Token>) -> Self { Self { tokens, pos: 0 } }
+    fn new(tokens: Vec<Token>) -> Self { Self { tokens, pos: 0, depth: 0 } }
+
+    /// Enter one level of recursive descent. Errors (rather than overflowing the stack) when
+    /// nesting exceeds [`MAX_PARSE_DEPTH`]. Pair every successful call with [`P::leave`].
+    fn enter(&mut self) -> Result<(), ParseError> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            return Err(ParseError::at(self.peek(), "nested too deeply"));
+        }
+        Ok(())
+    }
+
+    fn leave(&mut self) { self.depth = self.depth.saturating_sub(1); }
     fn peek(&self) -> Option<&Token> { self.tokens.get(self.pos) }
     fn peek_at(&self, off: usize) -> Option<&Token> { self.tokens.get(self.pos + off) }
     fn next(&mut self) -> Option<Token> {
@@ -266,6 +285,13 @@ fn parse_function(p: &mut P) -> Result<Function, ParseError> {
 }
 
 fn parse_block(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError> {
+    p.enter()?;
+    let out = parse_block_inner(p, min_indent_col);
+    p.leave();
+    out
+}
+
+fn parse_block_inner(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, ParseError> {
     let mut stmts = Vec::new();
     loop {
         p.skip_newlines();
@@ -1064,26 +1090,31 @@ fn parse_optional_else(p: &mut P, cond_col: usize) -> Result<Option<Vec<Stmt>>, 
 /// Expression precedence (low to high):
 ///   ternary → or → and → not → comparison → bit-or → bit-xor → bit-and
 ///   → shift → add/sub → mul/div/mod → power (right-assoc) → unary → postfix → primary.
-pub fn parse_expr(p: &mut P) -> Result<Expr, ParseError> {
+fn parse_expr(p: &mut P) -> Result<Expr, ParseError> {
     parse_ternary(p)
 }
 
 fn parse_ternary(p: &mut P) -> Result<Expr, ParseError> {
-    let cond = parse_logical_or(p)?;
-    if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Question)) {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
-        p.next();
-        let then_expr = parse_ternary(p)?;
-        p.expect_tok(&Tok::Colon, "`:` in ternary")?;
-        let else_expr = parse_ternary(p)?;
-        return Ok(Expr::Ternary {
-            cond: Box::new(cond),
-            then_expr: Box::new(then_expr),
-            else_expr: Box::new(else_expr),
-            line,
-        });
-    }
-    Ok(cond)
+    p.enter()?;
+    let out = (|| -> Result<Expr, ParseError> {
+        let cond = parse_logical_or(p)?;
+        if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Question)) {
+            let line = p.peek().map(|t| t.line).unwrap_or(0);
+            p.next();
+            let then_expr = parse_ternary(p)?;
+            p.expect_tok(&Tok::Colon, "`:` in ternary")?;
+            let else_expr = parse_ternary(p)?;
+            return Ok(Expr::Ternary {
+                cond: Box::new(cond),
+                then_expr: Box::new(then_expr),
+                else_expr: Box::new(else_expr),
+                line,
+            });
+        }
+        Ok(cond)
+    })();
+    p.leave();
+    out
 }
 
 fn parse_logical_or(p: &mut P) -> Result<Expr, ParseError> {
@@ -1112,8 +1143,10 @@ fn parse_logical_not(p: &mut P) -> Result<Expr, ParseError> {
     if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(ref w)) if w == "not") {
         let line = p.peek().map(|t| t.line).unwrap_or(0);
         p.next();
-        let inner = parse_logical_not(p)?;
-        return Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(inner), line });
+        p.enter()?;
+        let inner = parse_logical_not(p);
+        p.leave();
+        return Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(inner?), line });
     }
     parse_comparison(p)
 }
@@ -1225,8 +1258,10 @@ fn parse_power(p: &mut P) -> Result<Expr, ParseError> {
     if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Caret)) {
         let line = p.peek().map(|t| t.line).unwrap_or(0);
         p.next();
-        let right = parse_power(p)?;
-        return Ok(Expr::Binary { op: BinOp::Pow, lhs: Box::new(left), rhs: Box::new(right), line });
+        p.enter()?;
+        let right = parse_power(p);
+        p.leave();
+        return Ok(Expr::Binary { op: BinOp::Pow, lhs: Box::new(left), rhs: Box::new(right?), line });
     }
     Ok(left)
 }
@@ -1236,15 +1271,19 @@ fn parse_unary(p: &mut P) -> Result<Expr, ParseError> {
         Some(Tok::Minus) => {
             let line = p.peek().map(|t| t.line).unwrap_or(0);
             p.next();
-            let inner = parse_unary(p)?;
-            Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(inner), line })
+            p.enter()?;
+            let inner = parse_unary(p);
+            p.leave();
+            Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(inner?), line })
         }
-        Some(Tok::Plus) => { p.next(); parse_unary(p) }
+        Some(Tok::Plus) => { p.next(); p.enter()?; let r = parse_unary(p); p.leave(); r }
         Some(Tok::Tilde) => {
             let line = p.peek().map(|t| t.line).unwrap_or(0);
             p.next();
-            let inner = parse_unary(p)?;
-            Ok(Expr::Unary { op: UnaryOp::BitNot, expr: Box::new(inner), line })
+            p.enter()?;
+            let inner = parse_unary(p);
+            p.leave();
+            Ok(Expr::Unary { op: UnaryOp::BitNot, expr: Box::new(inner?), line })
         }
         _ => parse_primary(p),
     }

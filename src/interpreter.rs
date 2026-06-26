@@ -40,6 +40,9 @@ pub struct Ctx {
     pub strict: bool,
     pub capturing: bool,
     pub try_depth: usize,
+    /// Current depth of nested user-function calls. Bounded by [`MAX_CALL_DEPTH`] so runaway
+    /// recursion in a Rach program yields a diagnostic instead of overflowing the native stack.
+    pub call_depth: usize,
     pub source: String,
     pub script_path: String,
     pub log: LogState,
@@ -133,6 +136,12 @@ pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, message: &
 const RETURN_SIGNAL_CODE:   i64 = -1;
 const BREAK_SIGNAL_CODE:    i64 = -2;
 const CONTINUE_SIGNAL_CODE: i64 = -3;
+
+/// Maximum depth of nested user-function calls. Runaway recursion (`rach f(): f()`) would
+/// otherwise overflow the native stack and abort the process; this turns it into a catchable
+/// runtime error. Sized to stay within [`crate::INTERP_STACK_SIZE`], the stack the CLI gives
+/// the interpreter thread.
+const MAX_CALL_DEPTH: usize = 2000;
 
 fn return_signal(value: Value) -> RuntimeError {
     RuntimeError { code: RETURN_SIGNAL_CODE, line: 0, message: serialize_value(&value) }
@@ -243,6 +252,7 @@ pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
         strict,
         capturing: false,
         try_depth: 0,
+        call_depth: 0,
         source,
         script_path,
         log: LogState::default(),
@@ -306,6 +316,7 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
         strict,
         capturing: false,
         try_depth: 0,
+        call_depth: 0,
         source: source.to_string(),
         script_path: script_path.to_string(),
         log: LogState::default(),
@@ -1198,13 +1209,22 @@ fn call_user_function(name: &str, arg_values: Vec<Value>, line: usize, ctx: &mut
         all_args.push(default_val);
     }
 
+    if ctx.call_depth >= MAX_CALL_DEPTH {
+        return Err(RuntimeError::new(
+            500, line,
+            format!("call stack exceeded {} frames (infinite recursion?) in `{}`", MAX_CALL_DEPTH, name),
+        ));
+    }
+
     let mut frame = Scope::default();
     for (p, v) in func.params.iter().zip(all_args.into_iter()) {
         frame.vars.insert(p.clone(), v);
     }
+    ctx.call_depth += 1;
     ctx.scopes.push(frame);
     let result = run_block(&func.body, ctx);
     ctx.scopes.pop();
+    ctx.call_depth -= 1;
 
     match result {
         Ok(()) => Ok(Value::Nil),
