@@ -6,7 +6,7 @@
 
 open in browser("https://duckduckgo.com/")
 wait seconds(2)
-fill form id("searchbox_input") value("Rust language")
+fill form id("q") value("Rust language")
 press key("Enter")
 wait seconds(3)
 take screenshot("/tmp/rach_ddg.png")

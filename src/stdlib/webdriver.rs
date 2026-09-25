@@ -365,8 +365,9 @@ fn http_request(port: u16, method: &str, path: &str, body: Option<&str>) -> Resu
 
     let body_bytes = body.unwrap_or("");
     let mut req = format!(
-        "{} {} HTTP/1.1\r\nHost: 127.0.0.1\r\nUser-Agent: rach/0.2\r\nAccept: application/json\r\nConnection: close\r\n",
-        method, path
+        // geckodriver ≥0.34 rejects a Host header without the port.
+        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUser-Agent: rach/0.2\r\nAccept: application/json\r\nConnection: close\r\n",
+        method, path, port
     );
     if body.is_some() {
         req.push_str("Content-Type: application/json\r\n");

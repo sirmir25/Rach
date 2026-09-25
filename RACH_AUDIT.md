@@ -126,11 +126,15 @@ Branch: `harden/parser-robustness`.
 - Tests: `tests/robustness.rs` (7), `tests/runtime.rs` (2), `tests/stdlib.rs` (1),
   `tests/fuzz.rs` (2). Build warnings 18 → 3.
 
-### Known bug found, not yet fixed
+### Fixed after integration (branch `fix/integrate`)
 
-- **Lexer rejects `\` in `examples/native.rach:18`** (`unexpected character '\'`). Graceful
-  error, not a panic — but the example doesn't run. Corpus/triage candidate (escape
-  handling in string interpolation). _(pre-existing, unrelated to the recursion work.)_
+- **`examples/native.rach` lex error** — fixed by merging `feat/binary-installers`
+  (interpolation is opt-in via `f"…"`; plain strings are literal). Regression tests in
+  `tests/strings.rs`.
+- **WebDriver never started with geckodriver ≥0.34** — `Host` header lacked the port, so
+  every session failed with `Invalid Host header` and fell back to the OS browser.
+- Examples: DuckDuckGo search field is now `name="q"`; `login.rach` opens `/login`.
+- Build warnings 3 → 0.
 
 ### Left (needs direction / external deps)
 

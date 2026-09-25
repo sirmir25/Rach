@@ -407,7 +407,6 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             Ok(())
         }
         Stmt::Import { path, line } => {
-            use std::path::Path;
             let base_path = ctx.script_path.clone();
             let base = if base_path.is_empty() {
                 std::path::Path::new(".").to_path_buf()
@@ -624,7 +623,7 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             ctx.scopes.pop();
             Ok(())
         }
-        Stmt::Match { expr, arms, line } => {
+        Stmt::Match { expr, arms, .. } => {
             let val = eval_expr(expr, ctx)?;
             for arm in arms {
                 let mut bindings: HashMap<String, Value> = HashMap::new();

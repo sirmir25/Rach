@@ -1,7 +1,7 @@
 # Browser automation via real W3C WebDriver.
 # Picks any installed browser; auto-downloads chromedriver/geckodriver on first use.
 
-open in browser("https://github.com/")
+open in browser("https://github.com/login")
 wait seconds(2)
 login user("ilia") pws("hunter2")
 fill form id("login") value("ilia")
