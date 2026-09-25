@@ -1,12 +1,8 @@
-import web
-import browser
+# Browser automation via real W3C WebDriver.
+# Picks any installed browser; auto-downloads chromedriver/geckodriver on first use.
 
-rach main(0)
-    open in browser("https://github.com/")
-    wait seconds(2)
-    login user("ilia") pws("hunter2")
-    fill form id("login") value("ilia")
-    click button("Sign in")
-    completed
-return(end)
-(end0)
+open in browser("https://github.com/")
+wait seconds(2)
+login user("ilia") pws("hunter2")
+fill form id("login") value("ilia")
+click button("Sign in")

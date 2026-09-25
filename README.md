@@ -102,34 +102,37 @@ read("/tmp/hello.txt")
 
 Run: `rach hello.rach`.
 
-The longer "wrapped" form is still supported for back-compat and is necessary when you want helper functions:
+Helper functions can sit before or after the body:
 
 ```
-import system
+rach square(x):
+    return x * x
+end
 
-rach main(0)
-    create_file("/tmp/hello.txt", "hello from Rach")
-    completed
-return(end)
-(end0)
+print(square(7))   # 49
 ```
+
+The legacy wrapped form `rach main(0) ... return(end) (end0)` still parses for back-compat, but new code shouldn't use it.
 
 ---
 
 ## Script structure
 
-A file is one of:
+A `.rach` file is a mix of:
 
-1. **Top-level script** — bare statements; the parser wraps them in an implicit `main`. Helper functions, if any, follow the body.
-2. **Wrapped** — `rach main(0) ... return(end) (end0)` plus optional helpers in the same form.
+- **Top-level statements** — bare commands and expressions; collected, in source order, into an implicit `main`.
+- **Function defs** — `rach name(params): ... end`. May appear anywhere at the top level.
+- **Struct defs** — `struct Name { field1, field2 }`.
+- **Imports** — declarative-only, see below.
 
 Rules:
 
 - `import` lines are optional; the stdlib is always available. Imports serve as documentation of intent.
 - Comments: `#` or `//` until end of line.
-- Indentation is significant only inside `if`/`for`/`else` blocks.
+- Indentation is significant only inside `if`/`for`/`while`/`else`/function blocks.
 - The `set` keyword is optional: `x = 5` works the same as `set x = 5`.
 - The `completed` keyword is also optional — every command prints `completed` on success automatically.
+- Strings: `"..."` is a plain literal — `{` and `}` are literal characters. Use `f"hello, {name}"` to interpolate expressions, Python-style.
 
 ---
 
@@ -166,14 +169,23 @@ When a variable is on the RHS of `set`, the command runs in **capturing mode** �
 User functions are declared with named params and may `return <expr>`:
 
 ```
-rach square(x)
-    set result = run_command("echo squared")
-    return result
-return(end)
-(end0)
+rach square(x):
+    return x * x
+end
 ```
 
-Call them like commands the parser doesn't already know: `set y = square(7)`.
+Call them like commands the parser doesn't already know: `y = square(7)`.
+
+Default parameters use the C++ `name = expr` syntax:
+
+```
+rach greet(name, greeting = "hello"):
+    return greeting + ", " + name
+end
+
+greet("rach")               # "hello, rach"
+greet("rach", "hi")         # "hi, rach"
+```
 
 ---
 
@@ -185,12 +197,12 @@ Iterate over a list literal, a captured list variable, or a non-negative integer
 for url in ["https://one", "https://two"]:
     open in browser(url)
 
-set urls = ["a", "b", "c"]
+urls = ["a", "b", "c"]
 for u in urls:
-    run_command("echo visited")
+    run("echo visited")
 
 for i in 3:
-    create_file("/tmp/file", "x")
+    write("/tmp/file", "x")
 ```
 
 Strings split on commas: `for tag in "a,b,c":` yields `a`, `b`, `c`.
@@ -391,24 +403,23 @@ Border styles for `ascii box`: `single` (default), `double`, `bold`, `rounded`, 
 
 ---
 
-## Flow control: `if linux/macos/windows`
+## Flow control
 
-The only conditional operator — an OS check:
+General `if` / `else` / `while` work on any expression. `if linux` / `if macos` / `if windows` are sugar for OS checks:
 
 ```
-rach main(0)
-    if linux:
-        run_command("apt-get update")
-    if macos:
-        run_command("brew update")
-    if windows:
-        run_command("winget upgrade --all")
-    completed
-return(end)
-(end0)
+if linux:
+    run("apt-get update")
+else:
+    run("brew update")
+
+i = 0
+while i < 5:
+    print(i)
+    i = i + 1
 ```
 
-The block body — all lines indented more than the `if`. There are no empty `else` blocks — write multiple separate `if`s.
+The block body is anything indented more than the header line.
 
 `macos` is synonymous with `darwin`.
 
@@ -502,49 +513,58 @@ Exit codes:
 
 ---
 
-## Grammar (formal)
+## Grammar (informal)
 
 ```
-program       := { import_line } { function }
-import_line   := "import" IDENT NEWLINE
-function      := "rach" IDENT "(" INT ")" NEWLINE
-                   { stmt }
-                 "return" "(" "end" ")" NEWLINE
-                 "(" "end" [ INT ] ")" NEWLINE
+program        := { import_line | top_item }
+top_item       := function | struct | stmt
+import_line    := "import" IDENT NEWLINE
 
-stmt          := if_stmt
-              | bash_dsl
-              | ai_generate_call
-              | "completed" NEWLINE
-              | "error" INT [ "string" INT ] NEWLINE
-              | call
+function       := "rach" IDENT "(" [ params ] ")" ":" NEWLINE
+                    block
+                  "end" NEWLINE
+struct         := "struct" IDENT "{" { IDENT [ "," ] } "}" NEWLINE
 
-if_stmt       := "if" IDENT ":" NEWLINE
-                   { stmt at indent > if's-column }
+params         := param { "," param }
+param          := IDENT [ "=" expr ]
 
-bash_dsl      := IDENT "=" rest-of-line NEWLINE
-ai_generate_call := "ai_generate" "(" kw_args ")" NEWLINE
+block          := { stmt }
+stmt           := assign | if | while | for | return | try | call_stmt
+                | "break" | "continue" | "completed" | error_stmt
 
-call          := segment { segment } NEWLINE
-segment       := IDENT { IDENT } "(" arg_list ")"
-arg_list      := arg { "," arg }
-arg           := STRING | INT | IDENT | IDENT "=" (STRING | INT | IDENT)
+assign         := [ "set" ] IDENT [ "[" expr "]" | "." IDENT ]* "=" expr
+if             := "if" expr ":" NEWLINE block [ "else" ":" NEWLINE block ]
+while          := "while" expr ":" NEWLINE block
+for            := "for" IDENT [ "," IDENT ] "in" expr ":" NEWLINE block
+return         := "return" [ expr ]
+try            := "try:" NEWLINE block "rescue" [ "as" IDENT ] ":" NEWLINE block
+
+call_stmt      := segment { segment }
+segment        := IDENT { IDENT } "(" [ arg_list ] ")"
+arg_list       := arg { "," arg }
+arg            := expr | IDENT "=" expr
+
+expr           := … standard precedence climbing over
+                  + - * / % ^ == != < <= > >=  and or not
+                  with literals (int, float, string, f-string, list, map),
+                  variables, indexing `e[k]`, calls, ranges `a..b` / `a..=b`,
+                  postfix method calls `e.method(...)`, lambdas `\x -> expr`.
 ```
 
-The lexer treats `\n` as a significant separator. Identifiers — `[A-Za-z_][A-Za-z0-9_]*`. Strings — double-quoted with support for `\\`, `\"`, `\n`, `\t`, `\r`. Numbers — signed integers.
+The lexer treats `\n` as a significant separator. Identifiers — `[A-Za-z_][A-Za-z0-9_]*`. Strings — double-quoted; supported escapes `\\ \" \n \t \r \{ \}`. f-strings (`f"..."`) interpolate `{expr}`. Numbers — int (`42`) or float (`3.14`).
 
 ---
 
 ## Limitations and non-goals
 
-Currently Rach has **no**:
+What Rach intentionally doesn't try to be:
 
-- Arithmetic, string operations, comparisons.
-- User-defined conditions beyond OS checks (`if linux/macos/windows`, `if not <os>`, `else`).
-- Importing your own files.
-- Try/catch — errors are printed by default; with `RACH_STRICT=1` they abort.
+- A type system. Values are dynamically typed; runtime errors stay rustc-style.
+- A module system for user code. `import` lines are declarative; the stdlib is always linked. To split a project, run `rach` on multiple files via shell pipelines.
+- A package manager. The interpreter is one statically-linked binary.
+- An async runtime. Use `run("…")` to shell out to whatever does async well in your environment.
 
-This is intentional: the language is designed as a declarative script DSL for automation, not as general-purpose. If you need logic — write `run_command("python3 -c '...'")` or `ai_generate(language="python", task="...")` and let Python do the work.
+If you need a feature that isn't in the stdlib, the practical answer is `run("python3 -c '...'")` or `ai_generate(language="...", task="...")` — Rach is for orchestration, not for replacing real ecosystems.
 
 ---
 

@@ -23,10 +23,12 @@ ASCII text. UTF-8 in string literals is supported but never decomposed. Lines en
 |----------|-------------------------------|-------------------------|
 | Integer  | optional sign, digits         | `42`, `-1`, `0`         |
 | Float    | digits, dot, digits           | `3.14`, `0.5`           |
-| String   | double-quoted, escapes `\n \t \r \\ \"` | `"hello\n"`   |
+| String   | double-quoted, escapes `\n \t \r \\ \" \{ \}` | `"hello\n"`   |
+| f-string | `f"…{expr}…"`, interpolates expressions | `f"hi, {name}"` |
 | Bool     | keyword                       | `true`, `false`         |
 | Nil      | keyword                       | `nil`                   |
 | List     | bracketed, comma-separated    | `[1, "two", 3.0]`       |
+| Map      | brace-comma, string keys      | `{"x": 1, "y": 2}`      |
 
 ### 1.5 Operators and punctuation
 `( ) [ ] , = : + - * / % ^`. Newline is a statement terminator.
@@ -37,31 +39,19 @@ ASCII text. UTF-8 in string literals is supported but never decomposed. Lines en
 
 A file is one of:
 
-**(a) Top-level script** — bare statements; the parser auto-wraps them in an implicit `main`.
+A `.rach` file is a flat sequence of: import lines, top-level statements, function defs, and struct defs — in any order. Top-level statements are collected, in source order, into an implicit `main`.
 
 ```
-print("hi")
-x = 5
-print(x * 2)
-```
-
-**(b) Wrapped form** — explicit functions. Required if the file declares helpers.
-
-```
-import system
-
-rach square(x)
+rach square(x):
     return x * x
-return(end)
-(end0)
+end
 
-rach main(0)
-    print(square(7))
-return(end)
-(end0)
+print(square(7))   # 49
 ```
 
-A file must contain at most one `main`; execution starts there. Helper functions can be called from within `main` or from each other.
+A file may declare at most one `main`; execution starts there. If both an explicit `rach main(): ... end` and bare top-level statements are present, the bare statements run first, then the explicit body.
+
+The legacy form `rach name(N) ... return(end) (endK)` still parses for back-compat; new code shouldn't use it.
 
 ### 2.1 Imports
 
@@ -76,15 +66,13 @@ Recognised modules: `os`, `system`, `web`, `browser`, `linux`, `macos`, `windows
 ### 2.2 Function declaration
 
 ```
-rach <name>(<params>)
+rach <name>(<params>):
     <statements>
-return(end)
-(end<N>)
+end
 ```
 
-- `<params>` is one of: empty, an integer (legacy arity, ignored), or comma-separated identifier names.
-- `return(end)` marks the end of the body; it is *not* the same as `return <expr>`.
-- `(end<N>)` closes the function. The trailing digit is decorative.
+- `<params>` is empty, or a comma-separated list of identifiers, optionally with default values: `rach greet(name, greeting = "hello"):`.
+- The body is a block of statements indented past the `rach` keyword.
 
 Inside the body:
 - `return <expr>` — return a value; control leaves the function.
@@ -93,12 +81,15 @@ Inside the body:
 ### 2.3 Statements
 
 - Expression statement: any command or function call on its own line.
-- Variable assignment: `set NAME = <expr>` or shorthand `NAME = <expr>`.
-- `for <var> in <expr>:` block.
-- `if <os>:`, `if not <os>:`, optional `else:` block.
+- Variable assignment: `set NAME = <expr>` or shorthand `NAME = <expr>`. Index/field assignment: `m["k"] = v`, `s.field = v`.
+- `if <expr>:` / `else:` blocks (the predicate can be any expression, including OS sugar `if linux:`, `if not windows:`).
+- `while <expr>:` block; `do: ... while <expr>` for at-least-once loops.
+- `for <var> in <expr>:` block; `for k, v in <map>:` to destructure pairs.
+- `break`, `continue`.
+- `try: ... rescue [as <var>]: ...` — catch a runtime error, bind to `<var>` as `{ code, line, message }`.
 - `return <expr>`.
 - `error <code> [string <line>]` — print a manual error.
-- `completed` — print the literal word `completed`.
+- `completed` — print the literal word `completed` (optional; commands print it themselves on success).
 - `<word> = generate ... | search ... | web search ... | complete or error` — bash DSL (legacy).
 
 ---
@@ -120,8 +111,17 @@ Inside the body:
 - `^` is `f64::powf`.
 - Division/modulo by zero is a runtime error (code 400).
 
-### 3.3 String concatenation
+### 3.3 Strings and f-strings
 `+` between two strings concatenates: `"foo" + "bar"` → `"foobar"`. With a non-string operand, both are coerced to numbers.
+
+Plain `"..."` is fully literal — `{` and `}` are ordinary characters, so embedding C / JSON / regex / SQL needs no escaping. f-strings `f"..."` interpolate `{expr}` at runtime, where `expr` is any Rach expression. Use `\{` / `\}` to embed literal braces in an f-string.
+
+```
+name = "rach"
+greet = f"hello, {name}"     # "hello, rach"
+sum   = f"2+3 = {2 + 3}"     # "2+3 = 5"
+json  = "{\"k\": 1}"         # plain string, no interpolation
+```
 
 ### 3.4 Variables
 A variable is referenced by bare identifier. Unknown name → runtime error code 404.
@@ -350,18 +350,23 @@ rach help
 ## 8. Grammar (formal)
 
 ```
-program        := { import_line } ( wrapped_form | top_level_form )
+program        := { import_line | function | struct | stmt }
 import_line    := "import" IDENT NEWLINE
 
-wrapped_form   := function { function }
-top_level_form := { stmt } { function }
-
-function       := "rach" IDENT "(" param_list ")" NEWLINE
+function       := "rach" IDENT "(" [ param_list ] ")" ":" NEWLINE
                     { stmt }
-                  "return" "(" "end" ")" NEWLINE
-                  "(" "end" [ INT ] ")" NEWLINE
+                  "end" NEWLINE
+                  // legacy form, still accepted:
+                  // "rach" IDENT "(" param_list ")" NEWLINE
+                  //   { stmt }
+                  // "return" "(" "end" ")" NEWLINE
+                  // "(" "end" [ INT ] ")" NEWLINE
 
-param_list     := /* empty */ | INT | IDENT { "," IDENT }
+struct         := "struct" IDENT "{" field_list "}" NEWLINE
+field_list     := IDENT { [ "," ] IDENT }
+
+param_list     := param { "," param }
+param          := IDENT [ "=" expr ]
 
 stmt           := if_stmt | for_stmt | set_stmt | bash_dsl
                 | "completed" NEWLINE

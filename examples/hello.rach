@@ -1,10 +1,7 @@
-import system
+# Smallest useful Rach program: write, read, check, delete.
+# No `main`, no `import`, no end markers — top-level statements run in order.
 
-rach main(0)
-    create_file("/tmp/rach_hello.txt", "hello from Rach!")
-    read_file("/tmp/rach_hello.txt")
-    check_if_exists("/tmp/rach_hello.txt")
-    delete_file("/tmp/rach_hello.txt")
-    completed
-return(end)
-(end0)
+write("/tmp/rach_hello.txt", "hello from Rach!")
+read("/tmp/rach_hello.txt")
+exists("/tmp/rach_hello.txt")
+del("/tmp/rach_hello.txt")
