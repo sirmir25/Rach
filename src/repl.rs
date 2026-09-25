@@ -65,14 +65,14 @@ pub fn run() -> i32 {
 
         let tokens = match lexer::tokenize(&combined) {
             Ok(t) => t,
-            Err(e) => { report_pretty("lex", 400, "<repl>", e.line, &e.message, Some(&combined)); continue; }
+            Err(e) => { report_pretty("lex", 400, "<repl>", e.line, e.col, &e.message, Some(&combined)); continue; }
         };
         let program = match parser::parse(tokens) {
             Ok(p) => p,
-            Err(e) => { report_pretty("parse", 422, "<repl>", e.line, &e.message, Some(&combined)); continue; }
+            Err(e) => { report_pretty("parse", 422, "<repl>", e.line, e.col, &e.message, Some(&combined)); continue; }
         };
         if let Err(e) = interpreter::run_in_ctx(&program, &mut ctx) {
-            report_pretty("runtime", e.code, "<repl>", e.line, &e.message, Some(&combined));
+            report_pretty("runtime", e.code, "<repl>", e.line, 0, &e.message, Some(&combined));
         }
     }
     0

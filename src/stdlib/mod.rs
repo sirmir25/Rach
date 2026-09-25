@@ -17,7 +17,7 @@ pub mod webdriver;
 
 use std::collections::BTreeMap;
 
-use crate::ast::{CallSegment, Value};
+use crate::ast::Value;
 use crate::interpreter::{Ctx, RuntimeError};
 
 const KNOWN: &[&str] = &[
@@ -74,41 +74,18 @@ const KNOWN: &[&str] = &[
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
 /// command vs. a user-fn call. Multi-word commands are matched separately
-/// via the longest-prefix algorithm in `resolve_call`.
+/// via the longest-prefix algorithm in `resolve_resolved_segments`.
 pub fn is_known_command(word: &str) -> bool {
     KNOWN.iter().any(|k| k.starts_with(word) && (k.len() == word.len() || k.as_bytes()[word.len()] == b'_'))
 }
 
-fn resolve_call(segments: &[CallSegment]) -> Result<(String, Vec<Value>, BTreeMap<String, Vec<Value>>, Vec<&CallSegment>), String> {
-    if segments.is_empty() { return Err("empty call".into()); }
-
-    let mut all_words: Vec<&str> = Vec::new();
-    let mut segment_ends: Vec<usize> = Vec::new();
-    for seg in segments {
-        for w in &seg.words { all_words.push(w.as_str()); }
-        segment_ends.push(all_words.len());
-    }
-
-    for n in (1..=all_words.len()).rev() {
-        let candidate: String = all_words[..n].join("_");
-        if !KNOWN.iter().any(|k| *k == candidate) { continue; }
-
-        let split_seg = segment_ends.iter().position(|&e| e >= n).unwrap();
-        let words_consumed_in_split = n - if split_seg == 0 { 0 } else { segment_ends[split_seg - 1] };
-
-        // Return the segments *unchanged* — the caller resolves Exprs to Values
-        // before this function is called, so segments here already hold Values.
-        let _ = (words_consumed_in_split, split_seg);
-        return Ok((candidate, Vec::new(), BTreeMap::new(), segments.iter().collect()));
-    }
-
-    Err(format!("unknown command `{}`", all_words.join("_")))
-}
+/// Command name, positional args, and keyword args of a resolved call.
+type CallParts = (String, Vec<Value>, BTreeMap<String, Vec<Value>>);
 
 /// Resolve segments (already evaluated to Values) into (name, positional, kwargs).
 pub fn resolve_resolved_segments(
     segments_resolved: &[ResolvedSegment],
-) -> Result<(String, Vec<Value>, BTreeMap<String, Vec<Value>>), String> {
+) -> Result<CallParts, String> {
     if segments_resolved.is_empty() { return Err("empty call".into()); }
 
     let mut all_words: Vec<&str> = Vec::new();
@@ -136,7 +113,7 @@ pub fn resolve_resolved_segments(
         if words_consumed_in_split == split_seg_words.len() {
             positional.extend(segments_resolved[split_seg].positional.iter().cloned());
         } else {
-            let leftover: Vec<String> = split_seg_words[words_consumed_in_split..].iter().cloned().collect();
+            let leftover: Vec<String> = split_seg_words[words_consumed_in_split..].to_vec();
             let kname = leftover.join("_");
             kwargs.entry(kname).or_default().extend(segments_resolved[split_seg].positional.iter().cloned());
         }
@@ -348,11 +325,4 @@ pub fn dispatch(
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{}`", other))),
     }
-}
-
-// Suppress unused warning on the legacy resolve_call (kept in case future
-// refactors want it).
-#[allow(dead_code)]
-fn _legacy_resolve_call(segments: &[CallSegment]) -> Result<(String, Vec<Value>, BTreeMap<String, Vec<Value>>, Vec<&CallSegment>), String> {
-    resolve_call(segments)
 }

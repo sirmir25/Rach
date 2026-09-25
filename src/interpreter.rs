@@ -68,8 +68,8 @@ impl Ctx {
             }
         }
         for scope in self.scopes.iter_mut().rev() {
-            if scope.vars.contains_key(&name) {
-                scope.vars.insert(name, value);
+            if let Some(slot) = scope.vars.get_mut(&name) {
+                *slot = value;
                 return Ok(());
             }
         }
@@ -93,11 +93,12 @@ impl Ctx {
     }
 
     pub fn report_error(&self, code: i64, line: usize, message: &str) {
-        report_pretty("runtime", code, &self.script_path, line, message, Some(&self.source));
+        report_pretty("runtime", code, &self.script_path, line, 0, message, Some(&self.source));
     }
 }
 
-pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, message: &str, source: Option<&str>) {
+/// `col` is 1-based; 0 means unknown and suppresses the `^` marker.
+pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, col: usize, message: &str, source: Option<&str>) {
     use std::io::IsTerminal;
     let isatty = std::io::stderr().is_terminal();
     let (red, bold, dim, reset) = if isatty {
@@ -108,7 +109,11 @@ pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, message: &
 
     eprintln!("{}error[{}]{}: {}{}{}", red, code, reset, bold, message, reset);
     if line > 0 {
-        eprintln!("{}  --> {}{}:{}", dim, reset, path, line);
+        if col > 0 {
+            eprintln!("{}  --> {}{}:{}:{}", dim, reset, path, line, col);
+        } else {
+            eprintln!("{}  --> {}{}:{}", dim, reset, path, line);
+        }
         if let Some(src) = source {
             let lines: Vec<&str> = src.lines().collect();
             let lo = line.saturating_sub(2).max(1);
@@ -121,6 +126,12 @@ pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, message: &
                 let txt = lines[n - 1];
                 if n == line {
                     eprintln!("{}{:>w$} |{} {} {}{}{}", dim, n, reset, mark, red, txt, reset, w = width);
+                    if col > 0 {
+                        // Keep tabs so the caret lines up with the source as displayed.
+                        let pad: String = txt.chars().take(col - 1)
+                            .map(|c| if c == '\t' { '\t' } else { ' ' }).collect();
+                        eprintln!("{}{:>w$} |{}   {}{}^{}", dim, "", reset, pad, red, reset, w = width);
+                    }
                 } else {
                     eprintln!("{}{:>w$} |{} {} {}", dim, n, reset, mark, txt, w = width);
                 }
@@ -223,7 +234,7 @@ fn deserialize_value(s: &str) -> Value {
 thread_local! {
     static REF_STORE: std::cell::RefCell<std::collections::HashMap<u64, Value>>
         = std::cell::RefCell::new(std::collections::HashMap::new());
-    static REF_NEXT: std::cell::Cell<u64> = std::cell::Cell::new(1);
+    static REF_NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
 }
 
 fn stash_value(v: Value) -> u64 {
@@ -762,7 +773,9 @@ fn assign_to_target(target: &AssignTarget, value: Value, is_const: bool, line: u
     }
 }
 
-fn mutate_place(expr: &Expr, ctx: &mut Ctx, line: usize, mutator: Box<dyn FnOnce(&mut Value) -> Result<(), RuntimeError>>) -> Result<(), RuntimeError> {
+type Mutator = Box<dyn FnOnce(&mut Value) -> Result<(), RuntimeError>>;
+
+fn mutate_place(expr: &Expr, ctx: &mut Ctx, line: usize, mutator: Mutator) -> Result<(), RuntimeError> {
     match expr {
         Expr::Var(name) => {
             let mut v = ctx.lookup(name).ok_or_else(|| RuntimeError::new(404, line, format!("undefined variable `{}`", name)))?;
@@ -911,7 +924,7 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
             }
             "sort" | "sorted" => {
                 let mut new = items.clone();
-                new.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                new.sort_by_key(|a| a.as_str());
                 Some(Value::List(new))
             }
             "join" => {
@@ -1168,7 +1181,7 @@ pub fn call_value(callee: &Value, args: Vec<Value>, line: usize, ctx: &mut Ctx) 
             }
             let mut frame = Scope::default();
             for (k, v) in captured { frame.vars.insert(k.clone(), v.clone()); }
-            for (p, v) in params.iter().zip(args.into_iter()) {
+            for (p, v) in params.iter().zip(args) {
                 frame.vars.insert(p.clone(), v);
             }
             ctx.scopes.push(frame);
@@ -1216,7 +1229,7 @@ fn call_user_function(name: &str, arg_values: Vec<Value>, line: usize, ctx: &mut
     }
 
     let mut frame = Scope::default();
-    for (p, v) in func.params.iter().zip(all_args.into_iter()) {
+    for (p, v) in func.params.iter().zip(all_args) {
         frame.vars.insert(p.clone(), v);
     }
     ctx.call_depth += 1;
@@ -1246,10 +1259,10 @@ fn values_equal(l: &Value, r: &Value) -> bool {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(x, y))
         }
         (Value::Map(a), Value::Map(b)) => {
-            a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).map_or(false, |w| values_equal(v, w)))
+            a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|w| values_equal(v, w)))
         }
         (Value::Struct { name: an, fields: af }, Value::Struct { name: bn, fields: bf }) => {
-            an == bn && af.len() == bf.len() && af.iter().all(|(k, v)| bf.get(k).map_or(false, |w| values_equal(v, w)))
+            an == bn && af.len() == bf.len() && af.iter().all(|(k, v)| bf.get(k).is_some_and(|w| values_equal(v, w)))
         }
         _ => false,
     }

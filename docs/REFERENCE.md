@@ -277,14 +277,15 @@ If `ANTHROPIC_API_KEY` is set, calls Claude (`claude-haiku-4-5-20251001` by defa
 ### 5.1 Format
 ```
 error[<code>]: <message>
-  --> <file>:<line>
+  --> <file>:<line>[:<col>]
    |
- N |   <source line>
+ N | > <source line>
+   |       ^
  ...
    |
 // <stage> error <code> string <line>
 ```
-Stage is `lex`, `parse`, or `runtime`. Colours auto-disable when stderr is not a TTY.
+Stage is `lex`, `parse`, or `runtime`. Lex and parse errors include the column and a `^` under the offending token; runtime errors report the line only. Colours auto-disable when stderr is not a TTY.
 
 ### 5.2 Codes
 | Code | Meaning                                          |

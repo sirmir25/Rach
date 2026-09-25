@@ -9,13 +9,15 @@ use crate::lexer::{StrPart, Tok, Token};
 #[derive(Debug)]
 pub struct ParseError {
     pub line: usize,
+    /// 1-based column, or 0 when unknown.
+    pub col: usize,
     pub message: String,
 }
 
 impl ParseError {
     fn at(t: Option<&Token>, msg: impl Into<String>) -> Self {
-        let line = t.map(|t| t.line).unwrap_or(0);
-        ParseError { line, message: msg.into() }
+        let (line, col) = t.map(|t| (t.line, t.col)).unwrap_or((0, 0));
+        ParseError { line, col, message: msg.into() }
     }
 }
 
@@ -1532,7 +1534,7 @@ fn build_string_expr(parts: Vec<StrPart>, line: usize) -> Result<Expr, ParseErro
             StrPart::Lit(s) => out.push(InterpPart::Lit(s)),
             StrPart::Expr(src) => {
                 let tokens = crate::lexer::tokenize(&src)
-                    .map_err(|e| ParseError { line, message: format!("interp: lex error: {}", e.message) })?;
+                    .map_err(|e| ParseError { line, col: 0, message: format!("interp: lex error: {}", e.message) })?;
                 let mut sub = P::new(tokens);
                 sub.skip_newlines();
                 let e = parse_expr(&mut sub)?;

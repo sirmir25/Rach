@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --all-targets
+      - name: Test
+        run: cargo test
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  examples:
+    name: examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build
+      # Examples that need no browser or network. RACH_STRICT makes any
+      # runtime error fail the step.
+      - name: Run examples
+        env:
+          RACH_STRICT: '1'
+        run: |
+          for f in hello install_zsh native new_features short; do
+            echo "::group::$f"
+            ./target/debug/rach run "examples/$f.rach" < /dev/null
+            echo "::endgroup::"
+          done
+      - name: Parse-check all examples
+        run: for f in examples/*.rach; do ./target/debug/rach check "$f"; done

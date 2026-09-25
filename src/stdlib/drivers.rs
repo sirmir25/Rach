@@ -139,10 +139,8 @@ pub fn ensure_chromedriver() -> Result<PathBuf, String> {
     let want = if cfg!(windows) { "chromedriver.exe" } else { "chromedriver" };
     let found = find_file_recursive(&dir, want)
         .ok_or_else(|| "chromedriver binary not found after extract".to_string())?;
-    if found != bin {
-        if let Err(_) = std::fs::rename(&found, &bin) {
-            std::fs::copy(&found, &bin).map_err(|e| format!("copy chromedriver: {}", e))?;
-        }
+    if found != bin && std::fs::rename(&found, &bin).is_err() {
+        std::fs::copy(&found, &bin).map_err(|e| format!("copy chromedriver: {}", e))?;
     }
     chmod_exec(&bin)?;
     Ok(bin)

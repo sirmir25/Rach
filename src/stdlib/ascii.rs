@@ -45,7 +45,7 @@ pub fn banner(args: &[Value], _kwargs: &BTreeMap<String, Vec<Value>>, line: usiz
         }
         first = false;
     }
-    let lines: Vec<String> = rows.iter().cloned().collect();
+    let lines: Vec<String> = rows.to_vec();
     let out = lines.join("\n");
     print_lines(&lines);
     Ok(Value::Str(out))
@@ -154,7 +154,7 @@ pub fn pyramid(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let mut lines = Vec::new();
     for i in 0..height {
         let pad = " ".repeat(height - 1 - i);
-        let row = std::iter::repeat(ch).take(2 * i + 1).collect::<String>();
+        let row = std::iter::repeat_n(ch, 2 * i + 1).collect::<String>();
         lines.push(format!("{}{}", pad, row));
     }
     let out = lines.join("\n");
@@ -169,11 +169,11 @@ pub fn diamond(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let mut lines = Vec::new();
     for i in 0..n {
         let pad = " ".repeat(n - 1 - i);
-        lines.push(format!("{}{}", pad, std::iter::repeat(ch).take(2 * i + 1).collect::<String>()));
+        lines.push(format!("{}{}", pad, std::iter::repeat_n(ch, 2 * i + 1).collect::<String>()));
     }
     for i in (0..n - 1).rev() {
         let pad = " ".repeat(n - 1 - i);
-        lines.push(format!("{}{}", pad, std::iter::repeat(ch).take(2 * i + 1).collect::<String>()));
+        lines.push(format!("{}{}", pad, std::iter::repeat_n(ch, 2 * i + 1).collect::<String>()));
     }
     let out = lines.join("\n");
     print_lines(&lines);

@@ -136,6 +136,15 @@ Branch: `harden/parser-robustness`.
 - Examples: DuckDuckGo search field is now `name="q"`; `login.rach` opens `/login`.
 - Build warnings 3 → 0.
 
+### Done on `feat/diagnostics`
+
+- **P1 span diagnostics** — `LexError`/`ParseError` carry `col`; `report_pretty` prints
+  `file:line:col` and a `^` caret (tab-aware). Tests: `tests/diagnostics.rs`.
+- **Clippy (default lints)** — clean under `-D warnings`; dead `resolve_call` removed.
+- **CI** — `.github/workflows/ci.yml`: build/test/clippy on Linux/macOS/Windows, plus the
+  offline examples under `RACH_STRICT=1`. `cargo fmt --check` is deliberately not gated
+  (the codebase uses a compact one-line style that rustfmt would rewrite wholesale).
+
 ### Left (needs direction / external deps)
 
 - **P1 diagnostics with spans** (Phase 5): thread token `col` into errors + caret rendering.

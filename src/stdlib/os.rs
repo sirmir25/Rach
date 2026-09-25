@@ -20,7 +20,7 @@ pub fn listdir(args: &[Value], line: usize, _ctx: &Ctx) -> Result<Value, Runtime
         let entry = entry.map_err(|e| RuntimeError::new(500, line, format!("listdir: {}", e)))?;
         names.push(Value::Str(entry.file_name().to_string_lossy().to_string()));
     }
-    names.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    names.sort_by_key(|a| a.as_str());
     Ok(Value::List(names))
 }
 

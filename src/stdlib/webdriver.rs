@@ -346,7 +346,7 @@ fn http_request(port: u16, method: &str, path: &str, body: Option<&str>) -> Resu
     let mut stream = None;
     let mut last_err: Option<std::io::Error> = None;
     for _ in 0..20 {
-        match TcpStream::connect(&addr) {
+        match TcpStream::connect(addr) {
             Ok(s) => { stream = Some(s); break; }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
                    || e.kind() == std::io::ErrorKind::ConnectionRefused => {
