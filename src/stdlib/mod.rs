@@ -1,7 +1,9 @@
 pub mod ai;
 pub mod args;
 pub mod ascii;
+pub mod ascii_art;
 pub mod bash;
+pub mod canvas;
 pub mod cipher;
 pub mod collections;
 pub mod drivers;
@@ -45,7 +47,7 @@ const KNOWN: &[&str] = &[
     "execute_js", "download_file", "upload_file",
     // ascii art
     "ascii_banner", "ascii_box", "ascii_pyramid", "ascii_diamond",
-    "ascii_border", "ascii_mirror", "ascii_table",
+    "ascii_border", "ascii_mirror", "ascii_table", "ascii_text",
     // native (C / C++)
     "native_crc32", "native_base64", "native_sort_ints", "native_reverse",
     "run_c", "run_cpp",
@@ -245,6 +247,7 @@ pub fn dispatch(
         "ascii_border"  => ascii::border(positional, kwargs, line),
         "ascii_mirror"  => ascii::mirror(positional, line),
         "ascii_table"   => ascii::table(positional, kwargs, line),
+        "ascii_text"    => ascii_art::ascii_text(positional, kwargs, line, ctx),
 
         // ---- native (C / C++) ----
         "native_crc32"     => native::native_crc32(positional, line, ctx),
