@@ -584,7 +584,11 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
         }
         Stmt::Call { segments, line } => {
             let resolved = resolve_segments(segments, ctx)?;
-            match stdlib::dispatch_resolved(&resolved, *line, ctx) {
+            let result = match user_fn_shadowing(resolved, ctx) {
+                Ok((name, args)) => call_user_function(&name, args, *line, ctx),
+                Err(resolved) => stdlib::dispatch_resolved(&resolved, *line, ctx),
+            };
+            match result {
                 Ok(_) => Ok(()),
                 Err(e) if matches!(e.code, RETURN_SIGNAL_CODE | BREAK_SIGNAL_CODE | CONTINUE_SIGNAL_CODE) => Err(e),
                 Err(e) => {
@@ -1060,6 +1064,22 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
     Ok(result)
 }
 
+/// `name(args)` goes to a user-defined function called `name` when there is one, ahead of the
+/// stdlib: user code shadows builtins, as in Python. Without this, adding any stdlib command —
+/// or one whose name merely *starts* with `name_`, which the parser's multi-word command
+/// matching treats as a command — would silently break existing scripts that define `name`.
+/// Returns the resolved segments back untouched when it isn't a plain single-word user call.
+fn user_fn_shadowing(resolved: Vec<ResolvedSegment>, ctx: &Ctx) -> Result<(String, Vec<Value>), Vec<ResolvedSegment>> {
+    match resolved.as_slice() {
+        [seg] if seg.words.len() == 1 && seg.named.is_empty() && ctx.functions.contains_key(&seg.words[0]) => {
+            let seg = resolved.into_iter().next().expect("matched a one-element slice");
+            let name = seg.words.into_iter().next().expect("matched a one-word segment");
+            Ok((name, seg.positional))
+        }
+        _ => Err(resolved),
+    }
+}
+
 fn resolve_segments(segments: &[CallSegment], ctx: &mut Ctx) -> Result<Vec<ResolvedSegment>, RuntimeError> {
     let mut out = Vec::with_capacity(segments.len());
     for seg in segments {
@@ -1095,7 +1115,10 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
         }
         Expr::Call { segments, line } => {
             let resolved = resolve_segments(segments, ctx)?;
-            stdlib::dispatch_resolved(&resolved, *line, ctx)
+            match user_fn_shadowing(resolved, ctx) {
+                Ok((name, args)) => call_user_function(&name, args, *line, ctx),
+                Err(resolved) => stdlib::dispatch_resolved(&resolved, *line, ctx),
+            }
         }
         Expr::FnCall { name, args, line } => {
             let mut arg_values = Vec::with_capacity(args.len());
