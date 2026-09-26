@@ -1,0 +1,58 @@
+# Struct composition: a struct field can itself be a struct, methods can call other
+# methods on `self`, and two structs may each define a method with the same name.
+
+struct Point { x, y }
+struct Line { a, b }
+
+impl Point:
+    rach move(self, dx, dy):
+        self.x = self.x + dx
+        self.y = self.y + dy
+    end
+
+    rach moved_twice(self, dx, dy):
+        self.move(dx, dy)
+        self.move(dx, dy)
+    end
+
+    rach describe(self):
+        return f"({self.x}, {self.y})"
+    end
+end
+
+impl Line:
+    rach move(self, dx, dy):
+        self.a.move(dx, dy)
+        self.b.move(dx, dy)
+    end
+
+    rach describe(self):
+        return f"{self.a.describe()} -> {self.b.describe()}"
+    end
+end
+
+p = Point { x: 0, y: 0 }
+p.moved_twice(1, 1)
+print(p.describe())
+
+line = Line { a: Point { x: 0, y: 0 }, b: Point { x: 10, y: 10 } }
+line.move(5, 5)
+print(line.describe())
+
+struct Dog { name }
+struct Robot { name }
+
+impl Dog:
+    rach speak(self):
+        return f"{self.name} says woof"
+    end
+end
+
+impl Robot:
+    rach speak(self):
+        return f"{self.name} says beep"
+    end
+end
+
+print(Dog { name: "Rex" }.speak())
+print(Robot { name: "T-800" }.speak())
