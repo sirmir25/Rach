@@ -2,6 +2,7 @@ pub mod ai;
 pub mod args;
 pub mod ascii;
 pub mod bash;
+pub mod cipher;
 pub mod collections;
 pub mod drivers;
 pub mod encoding;
@@ -80,6 +81,10 @@ const KNOWN: &[&str] = &[
     "url_encode", "url_decode",
     // hashing
     "md5", "sha1", "sha256", "sha512", "crc32", "adler32", "fnv1a", "hmac", "pbkdf2",
+    // classical ciphers
+    "caesar_encrypt", "caesar_decrypt", "rot13", "rot47", "atbash",
+    "affine_encrypt", "affine_decrypt", "vigenere_encrypt", "vigenere_decrypt",
+    "beaufort", "autokey_encrypt", "autokey_decrypt",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -360,6 +365,20 @@ pub fn dispatch(
         "fnv1a"   => hash::fnv1a(positional, kwargs, line, ctx),
         "hmac"    => hash::hmac(positional, kwargs, line, ctx),
         "pbkdf2"  => hash::pbkdf2(positional, kwargs, line, ctx),
+
+        // ---- classical ciphers ----
+        "caesar_encrypt"   => cipher::caesar_encrypt(positional, kwargs, line, ctx),
+        "caesar_decrypt"   => cipher::caesar_decrypt(positional, kwargs, line, ctx),
+        "rot13"            => cipher::rot13(positional, kwargs, line, ctx),
+        "rot47"            => cipher::rot47_cmd(positional, kwargs, line, ctx),
+        "atbash"           => cipher::atbash_cmd(positional, kwargs, line, ctx),
+        "affine_encrypt"   => cipher::affine_encrypt(positional, kwargs, line, ctx),
+        "affine_decrypt"   => cipher::affine_decrypt(positional, kwargs, line, ctx),
+        "vigenere_encrypt" => cipher::vigenere_encrypt(positional, kwargs, line, ctx),
+        "vigenere_decrypt" => cipher::vigenere_decrypt(positional, kwargs, line, ctx),
+        "beaufort"         => cipher::beaufort_cmd(positional, kwargs, line, ctx),
+        "autokey_encrypt"  => cipher::autokey_encrypt(positional, kwargs, line, ctx),
+        "autokey_decrypt"  => cipher::autokey_decrypt(positional, kwargs, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }
