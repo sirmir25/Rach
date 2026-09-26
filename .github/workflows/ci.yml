@@ -46,7 +46,7 @@ jobs:
         env:
           RACH_STRICT: '1'
         run: |
-          for f in hello install_zsh native new_features short; do
+          for f in hello install_zsh native new_features oop short; do
             echo "::group::$f"
             ./target/debug/rach run "examples/$f.rach" < /dev/null
             echo "::endgroup::"

@@ -70,7 +70,8 @@ pub struct Token {
     pub col: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("lex error at {line}:{col}: {message}")]
 pub struct LexError {
     pub line: usize,
     /// 1-based column, or 0 when unknown.

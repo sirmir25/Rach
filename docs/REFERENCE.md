@@ -92,6 +92,24 @@ Inside the body:
 - `completed` — print the literal word `completed` (optional; commands print it themselves on success).
 - `<word> = generate ... | search ... | web search ... | complete or error` — bash DSL (legacy).
 
+### 2.4 Structs and methods
+
+```
+struct <Name> { <field> { , <field> } }
+
+impl <Name>:
+    rach <method>(self <, params>):
+        <statements>
+    end
+end
+```
+
+- `struct Point { x, y }` declares a record type. `Point { x: 3, y: 4 }` builds one; every declared field must be given (fields not listed default to `nil`).
+- `p.x` reads a field; `p.x = v` (or `p.x += v`, etc.) assigns one, the same as map-style field access.
+- `impl <Name>: ... end` attaches methods to a struct. Each method is written like a top-level function (same `rach ... : ... end` shape, default params included) but its **first parameter must be named `self`** — the interpreter binds it to the receiver and omits it from the call site: `p.dist()` calls a method declared `rach dist(self):`.
+- `self.field = <expr>` inside a method mutates the struct at the call site *when the receiver is an assignable place* — a variable (`p.move(1, 1)`), or a field/index chain reachable from one (`points[0].move(...)`, `obj.center.move(...)`). Calling a method on a value with no place to write back to (e.g. the direct result of another call) still runs normally; the mutation just doesn't persist past the call, as if `self` were passed by value.
+- Methods are dispatched by struct name, so different structs may each define a method with the same name.
+
 ---
 
 ## 3. Expressions
@@ -351,7 +369,7 @@ rach help
 ## 8. Grammar (formal)
 
 ```
-program        := { import_line | function | struct | stmt }
+program        := { import_line | function | struct | impl | stmt }
 import_line    := "import" IDENT NEWLINE
 
 function       := "rach" IDENT "(" [ param_list ] ")" ":" NEWLINE
@@ -365,6 +383,10 @@ function       := "rach" IDENT "(" [ param_list ] ")" ":" NEWLINE
 
 struct         := "struct" IDENT "{" field_list "}" NEWLINE
 field_list     := IDENT { [ "," ] IDENT }
+
+impl           := "impl" IDENT ":" NEWLINE
+                    { function }              // first param of each must be `self`
+                  "end" NEWLINE
 
 param_list     := param { "," param }
 param          := IDENT [ "=" expr ]

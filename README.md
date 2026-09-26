@@ -123,6 +123,7 @@ A `.rach` file is a mix of:
 - **Top-level statements** — bare commands and expressions; collected, in source order, into an implicit `main`.
 - **Function defs** — `rach name(params): ... end`. May appear anywhere at the top level.
 - **Struct defs** — `struct Name { field1, field2 }`.
+- **Impl blocks** — `impl Name: ... end`, methods on a struct. See [Structs and methods](#structs-and-methods).
 - **Imports** — declarative-only, see below.
 
 Rules:
@@ -186,6 +187,44 @@ end
 greet("rach")               # "hello, rach"
 greet("rach", "hi")         # "hi, rach"
 ```
+
+---
+
+## Structs and methods
+
+`struct Name { field1, field2 }` declares a record type; `Name { field1: expr, ... }` builds one. Every field must get a value (or is left `nil` if omitted).
+
+```
+struct Point { x, y }
+
+p = Point { x: 3, y: 4 }
+print(p.x)          # 3
+p.x = p.x + 1        # field assignment, like a map
+```
+
+`impl Name: ... end` adds methods, written just like top-level functions but with `self` as the first parameter:
+
+```
+impl Point:
+    rach dist(self):
+        return sqrt(self.x * self.x + self.y * self.y)
+    end
+
+    rach move(self, dx, dy = 0):
+        self.x = self.x + dx
+        self.y = self.y + dy
+    end
+end
+
+p = Point { x: 3, y: 4 }
+print(p.dist())      # 5.0
+p.move(1, 1)
+print(p.x, p.y)       # 4 5
+```
+
+A method that assigns to `self.field` mutates the struct in place when the receiver is an assignable spot — a variable (`p.move(...)`), or a field/index reachable from one (`points[0].move(...)`, `obj.center.move(...)`). Calling a method on a temporary value (e.g. the result of another call) still runs and returns normally; there's just nowhere to write the mutation back to, so it's discarded — same as passing a struct by value.
+
+Methods support default parameters exactly like functions, and dispatch by struct name, so two structs can each have their own `move` method without colliding.
 
 ---
 
@@ -517,13 +556,15 @@ Exit codes:
 
 ```
 program        := { import_line | top_item }
-top_item       := function | struct | stmt
+top_item       := function | struct | impl | stmt
 import_line    := "import" IDENT NEWLINE
 
 function       := "rach" IDENT "(" [ params ] ")" ":" NEWLINE
                     block
                   "end" NEWLINE
 struct         := "struct" IDENT "{" { IDENT [ "," ] } "}" NEWLINE
+impl           := "impl" IDENT ":" NEWLINE { function } "end" NEWLINE
+                  // each method's first param must be named `self`
 
 params         := param { "," param }
 param          := IDENT [ "=" expr ]

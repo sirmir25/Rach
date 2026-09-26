@@ -5,6 +5,7 @@ pub struct Program {
     pub imports: Vec<String>,
     pub functions: Vec<Function>,
     pub structs: Vec<StructDef>,
+    pub impls: Vec<ImplBlock>,
 }
 
 #[derive(Debug, Clone)]
@@ -21,6 +22,16 @@ pub struct Function {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<String>,
+    pub line: usize,
+}
+
+/// `impl StructName: rach method(self, ...): ... end ... end` — a struct's methods.
+/// Each method's first parameter must be named `self`; the interpreter binds it to
+/// the receiver and writes any mutation back to the call site when possible.
+#[derive(Debug, Clone)]
+pub struct ImplBlock {
+    pub struct_name: String,
+    pub methods: Vec<Function>,
     pub line: usize,
 }
 

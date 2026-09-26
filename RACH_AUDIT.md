@@ -145,21 +145,48 @@ Branch: `harden/parser-robustness`.
   offline examples under `RACH_STRICT=1`. `cargo fmt --check` is deliberately not gated
   (the codebase uses a compact one-line style that rustfmt would rewrite wholesale).
 
+### Done on `feat/diagnostics` (continued — network available, deps added)
+
+- **`thiserror` for error types** (P1-c) — `LexError`/`ParseError`/`RuntimeError` derive
+  `thiserror::Error` (`#[error("... at {line}:{col}: {message}")]` /
+  `#[error("runtime error {code} at line {line}: {message}")]`); they're now real
+  `std::error::Error` types usable with `?` and trait objects by anyone embedding `rach` as a
+  library, on top of the hand-rolled `report_pretty` rendering (unaffected — it doesn't use
+  `Display`).
+- **`insta` snapshot tests** (Phase 4) — `render_pretty` (the formatting half of
+  `report_pretty`, split out so it returns a `String` instead of only `eprintln!`-ing) is
+  snapshot-tested in `tests/diagnostics_snapshot.rs`: a lex error with a caret, a multi-line
+  parse error, and a line-less runtime error. Locks the exact rustc-style rendering — header,
+  source window, caret column — against silent drift.
+- **`criterion` benches** (Phase 6) — `benches/pipeline.rs` (`cargo bench`): lex+parse
+  throughput on a small script, `fib(18)` (recursive user-function call overhead), and a
+  `struct`/`impl`-method loop (method dispatch + `self`-mutation write-back cost). Not wired
+  into CI (benches are slow and noisy on shared runners); run locally when tuning hot paths.
+- **OOP: structs + methods** — `impl StructName: rach method(self, ...): ... end` attaches
+  methods to a `struct`. First param must be named `self`; the interpreter binds the receiver
+  to it and, after the call, writes any `self.field = ...` mutation back to the call site when
+  it's an assignable place (a variable, or a field/index chain reachable from one) — a
+  temporary's mutation is simply discarded, matching pass-by-value semantics. Supports default
+  params like regular functions; dispatch is by struct name, so two structs may each define a
+  same-named method. New statement-level grammar: `p.method(args)` as a bare statement (was
+  previously only parseable as an expression via `set x = p.method(args)`). Tests:
+  `tests/oop.rs` (5). Docs: README "Structs and methods", REFERENCE.md §2.4 + formal grammar
+  §8. Example: `examples/oop.rach` (wired into CI's offline-examples list).
+
 ### Left (needs direction / external deps)
 
-- **P1 diagnostics with spans** (Phase 5): thread token `col` into errors + caret rendering.
-  Dep choice: `ariadne` vs `codespan-reporting` vs hand-rolled (current `report_pretty` is
-  close). Needs network to add a crate.
-- **Corpus + `insta` snapshot tests** (Phase 4): needs `insta` dep.
-- **`criterion` benches + profiling** (Phase 6): needs `criterion` dep.
-- **CI workflow** (Phase 8): `build`/`test`/`clippy -D warnings`/`fmt --check`. Blocked on
-  clearing the ~620 remaining clippy::pedantic warnings first (mostly mechanical:
-  inline `format!` args, redundant closures, lossy casts).
-- **`thiserror` for error types** (P1-c): needs network.
+- **CI workflow** (Phase 8) fmt gate: `cargo fmt --check` is still deliberately not gated (see
+  the CI section above — the codebase's compact one-line style predates this session and
+  rustfmt would rewrite it wholesale). No change here.
+- **Corpus fuzzing beyond the front-end**: `tests/fuzz.rs` only fuzzes lexer→parser. Fuzzing
+  the interpreter (random-but-well-formed ASTs) would need a generator and is a bigger lift —
+  not attempted this pass.
 
 ### Next step
 
-Proceed to **P1 span diagnostics** (highest remaining priority) — recommend hand-rolling
-the caret into the existing `report_pretty` to avoid a new dependency, since it already does
-the source-window rendering. Confirm dependency policy (is adding crates from crates.io OK
-in this environment?) before the `insta`/`criterion`/`thiserror`/`ariadne` phases.
+The audit's outstanding P1/P2 items (diagnostics spans, tests, thiserror, insta, criterion) are
+now all closed. Candidates for a future pass, roughly in priority order: extend OOP with a
+second struct-like construct if a concrete need shows up (kept deliberately minimal — no
+inheritance/traits — since nothing in the existing stdlib or examples asked for one yet);
+interpreter-level fuzzing; and clearing the remaining `clippy::pedantic` backlog (mechanical,
+not correctness-bearing) if a stricter lint gate is ever wanted.

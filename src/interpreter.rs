@@ -9,7 +9,8 @@ use crate::stdlib::logging::LogState;
 use crate::stdlib::webdriver::Session;
 use crate::stdlib::ResolvedSegment;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("runtime error {code} at line {line}: {message}")]
 pub struct RuntimeError {
     pub code: i64,
     pub line: usize,
@@ -37,6 +38,8 @@ pub struct Ctx {
     pub scopes: Vec<Scope>,
     pub functions: HashMap<String, Function>,
     pub structs: HashMap<String, StructDef>,
+    /// struct name -> method name -> method. Populated from `impl` blocks.
+    pub impls: HashMap<String, HashMap<String, Function>>,
     pub strict: bool,
     pub capturing: bool,
     pub try_depth: usize,
@@ -101,47 +104,60 @@ impl Ctx {
 pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, col: usize, message: &str, source: Option<&str>) {
     use std::io::IsTerminal;
     let isatty = std::io::stderr().is_terminal();
-    let (red, bold, dim, reset) = if isatty {
+    eprint!("{}", render_pretty(stage, code, path, line, col, message, source, isatty));
+}
+
+/// Builds the rustc-style diagnostic text `report_pretty` prints. Split out (and made
+/// `color` an explicit argument rather than a TTY check) so tests can snapshot the exact
+/// rendering deterministically instead of only exercising `report_pretty`'s side effect.
+/// Same parameter list as `report_pretty` plus `color`; a struct would just move the
+/// same eight pieces of data one level of indirection away.
+#[allow(clippy::too_many_arguments)]
+pub fn render_pretty(stage: &str, code: i64, path: &str, line: usize, col: usize, message: &str, source: Option<&str>, color: bool) -> String {
+    use std::fmt::Write;
+    let (red, bold, dim, reset) = if color {
         ("\x1b[31;1m", "\x1b[1m", "\x1b[2m", "\x1b[0m")
     } else {
         ("", "", "", "")
     };
 
-    eprintln!("{}error[{}]{}: {}{}{}", red, code, reset, bold, message, reset);
+    let mut out = String::new();
+    let _ = writeln!(out, "{}error[{}]{}: {}{}{}", red, code, reset, bold, message, reset);
     if line > 0 {
         if col > 0 {
-            eprintln!("{}  --> {}{}:{}:{}", dim, reset, path, line, col);
+            let _ = writeln!(out, "{}  --> {}{}:{}:{}", dim, reset, path, line, col);
         } else {
-            eprintln!("{}  --> {}{}:{}", dim, reset, path, line);
+            let _ = writeln!(out, "{}  --> {}{}:{}", dim, reset, path, line);
         }
         if let Some(src) = source {
             let lines: Vec<&str> = src.lines().collect();
             let lo = line.saturating_sub(2).max(1);
             let hi = (line + 1).min(lines.len());
             let width = hi.to_string().len();
-            eprintln!("{}{:>w$} |{}", dim, "", reset, w = width);
+            let _ = writeln!(out, "{}{:>w$} |{}", dim, "", reset, w = width);
             for n in lo..=hi {
                 if n == 0 || n > lines.len() { continue; }
                 let mark = if n == line { ">" } else { " " };
                 let txt = lines[n - 1];
                 if n == line {
-                    eprintln!("{}{:>w$} |{} {} {}{}{}", dim, n, reset, mark, red, txt, reset, w = width);
+                    let _ = writeln!(out, "{}{:>w$} |{} {} {}{}{}", dim, n, reset, mark, red, txt, reset, w = width);
                     if col > 0 {
                         // Keep tabs so the caret lines up with the source as displayed.
                         let pad: String = txt.chars().take(col - 1)
                             .map(|c| if c == '\t' { '\t' } else { ' ' }).collect();
-                        eprintln!("{}{:>w$} |{}   {}{}^{}", dim, "", reset, pad, red, reset, w = width);
+                        let _ = writeln!(out, "{}{:>w$} |{}   {}{}^{}", dim, "", reset, pad, red, reset, w = width);
                     }
                 } else {
-                    eprintln!("{}{:>w$} |{} {} {}", dim, n, reset, mark, txt, w = width);
+                    let _ = writeln!(out, "{}{:>w$} |{} {} {}", dim, n, reset, mark, txt, w = width);
                 }
             }
-            eprintln!("{}{:>w$} |{}", dim, "", reset, w = width);
+            let _ = writeln!(out, "{}{:>w$} |{}", dim, "", reset, w = width);
         }
     } else {
-        eprintln!("{}  --> {}{}", dim, reset, path);
+        let _ = writeln!(out, "{}  --> {}{}", dim, reset, path);
     }
-    eprintln!("{}// {} error {} string {}{}", dim, stage, code, line, reset);
+    let _ = writeln!(out, "{}// {} error {} string {}{}", dim, stage, code, line, reset);
+    out
 }
 
 const RETURN_SIGNAL_CODE:   i64 = -1;
@@ -260,6 +276,7 @@ pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
         scopes: vec![Scope::default()],
         functions: HashMap::new(),
         structs: HashMap::new(),
+        impls: HashMap::new(),
         strict,
         capturing: false,
         try_depth: 0,
@@ -270,12 +287,30 @@ pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
     }
 }
 
+/// Build `struct name -> method name -> method` from a program's `impl` blocks.
+fn build_impls(impl_blocks: &[crate::ast::ImplBlock]) -> HashMap<String, HashMap<String, Function>> {
+    let mut impls: HashMap<String, HashMap<String, Function>> = HashMap::new();
+    for ib in impl_blocks {
+        let entry = impls.entry(ib.struct_name.clone()).or_default();
+        for m in &ib.methods {
+            entry.insert(m.name.clone(), m.clone());
+        }
+    }
+    impls
+}
+
 pub fn run_in_ctx(program: &Program, ctx: &mut Ctx) -> Result<(), RuntimeError> {
     for f in &program.functions {
         ctx.functions.insert(f.name.clone(), f.clone());
     }
     for s in &program.structs {
         ctx.structs.insert(s.name.clone(), s.clone());
+    }
+    for (struct_name, methods) in build_impls(&program.impls) {
+        let entry = ctx.impls.entry(struct_name).or_default();
+        for (mname, m) in methods {
+            entry.insert(mname, m);
+        }
     }
     if let Some(main) = program.functions.iter().find(|f| f.name == "main") {
         let result = run_block(&main.body, ctx);
@@ -314,6 +349,7 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
     for s in &program.structs {
         structs.insert(s.name.clone(), s.clone());
     }
+    let impls = build_impls(&program.impls);
 
     let mut ctx = Ctx {
         imports,
@@ -324,6 +360,7 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
         scopes: vec![Scope::default()],
         functions,
         structs,
+        impls,
         strict,
         capturing: false,
         try_depth: 0,
@@ -436,12 +473,18 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             let program = crate::parser::parse(tokens).map_err(|e| {
                 RuntimeError::new(500, *line, format!("import `{}`: parse error: {}", full.display(), e.message))
             })?;
-            // merge structs and functions into current context
+            // merge structs, functions, and impls into current context
             for sd in program.structs {
                 ctx.structs.insert(sd.name.clone(), sd);
             }
             for f in &program.functions {
                 ctx.functions.insert(f.name.clone(), f.clone());
+            }
+            for (struct_name, methods) in build_impls(&program.impls) {
+                let entry = ctx.impls.entry(struct_name).or_default();
+                for (mname, m) in methods {
+                    entry.insert(mname, m);
+                }
             }
             // run the top-level body of the imported file
             let main_fn = program.functions.iter().find(|f| f.name == "main").cloned();
@@ -1069,6 +1112,22 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
                 if let Some(result) = call_method(&obj, method, &arg_values, *line, ctx)? {
                     return Ok(result);
                 }
+                if let Value::Struct { name: struct_name, .. } = &obj {
+                    if ctx.impls.get(struct_name).is_some_and(|m| m.contains_key(method)) {
+                        let struct_name = struct_name.clone();
+                        let (result, self_after) =
+                            call_struct_method(&struct_name, method, obj, arg_values, *line, ctx)?;
+                        // `self` mutations are written back to the call site when it's an
+                        // assignable place (a variable, or a nested field/index into one).
+                        // A temporary (e.g. `make_point().move(...)`) has nowhere to write
+                        // back to, which is fine — the mutation just doesn't outlive the call.
+                        let _ = mutate_place(target, ctx, *line, Box::new(move |slot| {
+                            *slot = self_after;
+                            Ok(())
+                        }));
+                        return Ok(result);
+                    }
+                }
             }
             // If callee is `Var(name)` and `name` is a known user function, prefer calling
             // it by name (so functions defined later still resolve). Otherwise eval the
@@ -1243,6 +1302,77 @@ fn call_user_function(name: &str, arg_values: Vec<Value>, line: usize, ctx: &mut
         Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(deserialize_value(&e.message)),
         Err(e) => Err(e),
     }
+}
+
+/// Call a user-defined `impl` method with `self_val` bound to its `self` parameter.
+/// Returns the method's return value plus `self` as it stood after the call, so the
+/// caller can write mutations back to whatever place `self` came from.
+fn call_struct_method(
+    struct_name: &str,
+    method_name: &str,
+    self_val: Value,
+    arg_values: Vec<Value>,
+    line: usize,
+    ctx: &mut Ctx,
+) -> Result<(Value, Value), RuntimeError> {
+    let func = ctx.impls.get(struct_name)
+        .and_then(|m| m.get(method_name))
+        .cloned()
+        .ok_or_else(|| RuntimeError::new(404, line, format!("struct `{}` has no method `{}`", struct_name, method_name)))?;
+
+    if func.params.first().map(String::as_str) != Some("self") {
+        return Err(RuntimeError::new(500, line, format!(
+            "method `{}.{}` must take `self` as its first parameter", struct_name, method_name
+        )));
+    }
+    let rest_params = &func.params[1..];
+    let rest_defaults = &func.defaults[1..];
+
+    let required = rest_defaults.iter().filter(|d| d.is_none()).count();
+    if arg_values.len() < required || arg_values.len() > rest_params.len() {
+        return Err(RuntimeError::new(400, line, format!(
+            "method `{}.{}` expects {}-{} argument(s), got {}",
+            struct_name, method_name, required, rest_params.len(), arg_values.len()
+        )));
+    }
+
+    let mut all_args = arg_values;
+    for i in all_args.len()..rest_params.len() {
+        let default_val = match &rest_defaults[i] {
+            Some(expr) => eval_expr(expr, ctx)?,
+            None => return Err(RuntimeError::new(400, line, format!(
+                "method `{}.{}`: missing required argument `{}`", struct_name, method_name, rest_params[i]
+            ))),
+        };
+        all_args.push(default_val);
+    }
+
+    if ctx.call_depth >= MAX_CALL_DEPTH {
+        return Err(RuntimeError::new(500, line, format!(
+            "call stack exceeded {} frames (infinite recursion?) in `{}.{}`", MAX_CALL_DEPTH, struct_name, method_name
+        )));
+    }
+
+    let mut frame = Scope::default();
+    frame.vars.insert("self".to_string(), self_val);
+    for (p, v) in rest_params.iter().zip(all_args) {
+        frame.vars.insert(p.clone(), v);
+    }
+    ctx.call_depth += 1;
+    ctx.scopes.push(frame);
+    let result = run_block(&func.body, ctx);
+    let self_after = ctx.scopes.last()
+        .and_then(|s| s.vars.get("self").cloned())
+        .unwrap_or(Value::Nil);
+    ctx.scopes.pop();
+    ctx.call_depth -= 1;
+
+    let ret = match result {
+        Ok(()) => Value::Nil,
+        Err(e) if e.code == RETURN_SIGNAL_CODE => deserialize_value(&e.message),
+        Err(e) => return Err(e),
+    };
+    Ok((ret, self_after))
 }
 
 pub fn values_equal_pub(l: &Value, r: &Value) -> bool { values_equal(l, r) }

@@ -1,0 +1,30 @@
+# Structs + methods: `impl` blocks attach behavior to a `struct`.
+
+struct Point { x, y }
+
+impl Point:
+    rach dist(self):
+        return sqrt(self.x * self.x + self.y * self.y)
+    end
+
+    rach move(self, dx, dy = 0):
+        self.x = self.x + dx
+        self.y = self.y + dy
+    end
+
+    rach describe(self, label = "point"):
+        return f"{label} = ({self.x}, {self.y})"
+    end
+end
+
+p = Point { x: 3, y: 4 }
+print(p.describe())
+print(p.dist())
+
+p.move(1, 1)
+print(p.describe("moved"))
+
+points = [Point { x: 0, y: 0 }, Point { x: 10, y: 10 }]
+points[0].move(5, 5)
+print(points[0].describe("a"))
+print(points[1].describe("b"))

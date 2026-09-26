@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
 use crate::ast::{
-    AssignTarget, BashAction, BinOp, CallSegment, Expr, Function, InterpPart, MatchArm,
+    AssignTarget, BashAction, BinOp, CallSegment, Expr, Function, ImplBlock, InterpPart, MatchArm,
     MatchPattern, Program, Stmt, StructDef, UnaryOp, Value,
 };
 use crate::lexer::{StrPart, Tok, Token};
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("parse error at {line}:{col}: {message}")]
 pub struct ParseError {
     pub line: usize,
     /// 1-based column, or 0 when unknown.
@@ -90,6 +91,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
     let mut imports = Vec::new();
     let mut functions = Vec::new();
     let mut structs: Vec<StructDef> = Vec::new();
+    let mut impls: Vec<ImplBlock> = Vec::new();
 
     p.skip_newlines();
 
@@ -138,6 +140,10 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
                 let s = parse_struct(&mut p)?;
                 structs.push(s);
             }
+            Tok::Word(w) if w == "impl" => {
+                let i = parse_impl(&mut p)?;
+                impls.push(i);
+            }
             _ => {
                 let stmt = parse_stmt(&mut p)?;
                 main_body.push(stmt);
@@ -172,7 +178,36 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
         });
     }
 
-    Ok(Program { imports, functions, structs })
+    Ok(Program { imports, functions, structs, impls })
+}
+
+/// `impl Name:` NEWLINE { method } `end` NEWLINE — a struct's methods, each written
+/// like a top-level function (`rach method(self, ...): ... end`) with `self` as the
+/// receiver.
+fn parse_impl(p: &mut P) -> Result<ImplBlock, ParseError> {
+    let header = p.expect_word("impl")?;
+    let name_tok = p.next().ok_or_else(|| ParseError::at(Some(&header), "expected struct name after `impl`"))?;
+    let name = match name_tok.tok {
+        Tok::Word(s) => s,
+        _ => return Err(ParseError::at(Some(&name_tok), "expected struct name after `impl`")),
+    };
+    p.expect_tok(&Tok::Colon, "`:`")?;
+    p.expect_newline()?;
+    p.skip_newlines();
+
+    let mut methods: Vec<Function> = Vec::new();
+    loop {
+        p.skip_newlines();
+        match p.peek().map(|t| t.tok.clone()) {
+            Some(Tok::Word(w)) if w == "end" => { p.next(); break; }
+            Some(Tok::Word(w)) if w == "rach" => {
+                methods.push(parse_function(p)?);
+            }
+            _ => return Err(ParseError::at(p.peek(), "expected a method (`rach ...`) or `end` inside `impl` block")),
+        }
+    }
+    let _ = p.expect_newline();
+    Ok(ImplBlock { struct_name: name, methods, line: header.line })
 }
 
 fn expect_end_marker(p: &mut P) -> Result<(), ParseError> {
@@ -993,6 +1028,23 @@ fn parse_bash_dsl_rhs(p: &mut P) -> Result<(BashAction, String), ParseError> {
 }
 
 fn parse_call_or_fncall_stmt(p: &mut P, line: usize) -> Result<Stmt, ParseError> {
+    // `obj.method(args)` / `list[i].method(args)` as a bare statement (called for its
+    // side effect). `try_parse_place_assign` already ruled out `=`/`+=` above and reset
+    // `p` back to `word`, so this only fires when the chain ends in a call.
+    if let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
+        if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Dot) | Some(Tok::LBracket)) {
+            let saved = p.pos;
+            p.next();
+            match parse_postfix_chain(p, Expr::Var(w)) {
+                Ok(chained @ Expr::CallValue { .. }) => {
+                    p.expect_newline()?;
+                    return Ok(Stmt::ExprStmt { expr: chained, line });
+                }
+                _ => { p.pos = saved; }
+            }
+        }
+    }
+
     if let (Some(Tok::Word(w)), Some(Tok::LParen)) = (
         p.peek().map(|t| t.tok.clone()),
         p.peek_at(1).map(|t| t.tok.clone()),
