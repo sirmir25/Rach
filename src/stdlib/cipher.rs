@@ -35,7 +35,7 @@ impl Alphabet {
         }
     }
 
-    pub fn len(&self) -> usize { self.upper.len() }
+    pub fn size(&self) -> usize { self.upper.len() }
 
     /// `(index, is_uppercase)` for a letter of this alphabet.
     pub fn index(&self, c: char) -> Option<(usize, bool)> {
@@ -63,7 +63,7 @@ fn map_letters(text: &str, abc: &Alphabet, mut f: impl FnMut(usize, usize) -> us
     let mut n = 0;
     text.chars().map(|c| match abc.index(c) {
         Some((i, upper)) => {
-            let out = abc.letter(f(i, n) % abc.len(), upper);
+            let out = abc.letter(f(i, n) % abc.size(), upper);
             n += 1;
             out
         }
@@ -76,12 +76,12 @@ fn modulo(x: i64, m: usize) -> usize {
 }
 
 pub fn caesar(text: &str, shift: i64, abc: &Alphabet) -> String {
-    let s = modulo(shift, abc.len());
+    let s = modulo(shift, abc.size());
     map_letters(text, abc, |i, _| i + s)
 }
 
 pub fn atbash(text: &str, abc: &Alphabet) -> String {
-    let n = abc.len();
+    let n = abc.size();
     map_letters(text, abc, |i, _| n - 1 - i)
 }
 
@@ -92,7 +92,7 @@ fn mod_inverse(a: usize, m: usize) -> Option<usize> {
 }
 
 pub fn affine(text: &str, a: i64, b: i64, decrypt: bool, abc: &Alphabet) -> Result<String, String> {
-    let n = abc.len();
+    let n = abc.size();
     let a = modulo(a, n);
     let b = modulo(b, n);
     if gcd(a, n) != 1 {
@@ -107,7 +107,7 @@ pub fn affine(text: &str, a: i64, b: i64, decrypt: bool, abc: &Alphabet) -> Resu
 }
 
 pub fn vigenere(text: &str, key: &[usize], decrypt: bool, abc: &Alphabet) -> String {
-    let n = abc.len();
+    let n = abc.size();
     map_letters(text, abc, |i, pos| {
         let k = key[pos % key.len()];
         if decrypt { i + n - k } else { i + k }
@@ -116,14 +116,14 @@ pub fn vigenere(text: &str, key: &[usize], decrypt: bool, abc: &Alphabet) -> Str
 
 /// Beaufort (c = k − p) is its own inverse: the same call encrypts and decrypts.
 pub fn beaufort(text: &str, key: &[usize], abc: &Alphabet) -> String {
-    let n = abc.len();
+    let n = abc.size();
     map_letters(text, abc, |i, pos| key[pos % key.len()] + n - i)
 }
 
 /// Autokey: the keystream is the key followed by the plaintext itself, so there's no
 /// repeating period for Kasiski/Babbage to find.
 pub fn autokey(text: &str, key: &[usize], decrypt: bool, abc: &Alphabet) -> String {
-    let n = abc.len();
+    let n = abc.size();
     let mut stream: Vec<usize> = key.to_vec();
     map_letters(text, abc, |i, pos| {
         let k = stream[pos];
