@@ -6,6 +6,7 @@ pub mod bash;
 pub mod canvas;
 pub mod cipher;
 pub mod collections;
+pub mod convert;
 pub mod drivers;
 pub mod encoding;
 pub mod enigma;
@@ -75,6 +76,8 @@ const KNOWN: &[&str] = &[
     "env_get", "env_set",
     // io
     "input",
+    // conversions
+    "int", "float", "str", "bool", "type_of",
     // time
     "now", "now_ms", "sleep_ms", "format_time",
     // json
@@ -350,6 +353,13 @@ pub fn dispatch(
 
         // ---- io ----
         "input"      => io::input(positional, line, ctx),
+
+        // ---- conversions ----
+        "int"     => convert::int(positional, kwargs, line, ctx),
+        "float"   => convert::float(positional, kwargs, line, ctx),
+        "str"     => convert::str(positional, kwargs, line, ctx),
+        "bool"    => convert::bool(positional, kwargs, line, ctx),
+        "type_of" => convert::type_of(positional, kwargs, line, ctx),
 
         // ---- time ----
         "now"         => time::now(positional, line, ctx),
