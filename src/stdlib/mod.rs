@@ -13,6 +13,7 @@ pub mod io;
 pub mod json;
 pub mod logging;
 pub mod math;
+pub mod modern;
 pub mod native;
 pub mod os;
 pub mod system;
@@ -91,6 +92,11 @@ const KNOWN: &[&str] = &[
     "bifid_encrypt", "bifid_decrypt", "adfgvx_encrypt", "adfgvx_decrypt",
     "bacon_encrypt", "bacon_decrypt", "morse_encode", "morse_decode",
     "enigma", "vigenere_crack", "caesar_crack", "index_of_coincidence", "letter_frequencies",
+    // modern ciphers
+    "xor_encrypt", "xor_decrypt", "rc4_encrypt", "rc4_decrypt", "aes_encrypt", "aes_decrypt",
+    "chacha20_encrypt", "chacha20_decrypt", "poly1305",
+    "chacha20_poly1305_encrypt", "chacha20_poly1305_decrypt",
+    "encrypt", "decrypt", "random_bytes",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -406,6 +412,22 @@ pub fn dispatch(
         "caesar_crack"         => cipher::caesar_crack(positional, kwargs, line, ctx),
         "index_of_coincidence" => cipher::index_of_coincidence(positional, kwargs, line, ctx),
         "letter_frequencies"   => cipher::letter_frequencies(positional, kwargs, line, ctx),
+
+        // ---- modern ciphers ----
+        "xor_encrypt"               => modern::xor_encrypt(positional, kwargs, line, ctx),
+        "xor_decrypt"               => modern::xor_decrypt(positional, kwargs, line, ctx),
+        "rc4_encrypt"               => modern::rc4_encrypt(positional, kwargs, line, ctx),
+        "rc4_decrypt"               => modern::rc4_decrypt(positional, kwargs, line, ctx),
+        "aes_encrypt"               => modern::aes_encrypt(positional, kwargs, line, ctx),
+        "aes_decrypt"               => modern::aes_decrypt(positional, kwargs, line, ctx),
+        "chacha20_encrypt"          => modern::chacha20_encrypt(positional, kwargs, line, ctx),
+        "chacha20_decrypt"          => modern::chacha20_decrypt(positional, kwargs, line, ctx),
+        "poly1305"                  => modern::poly1305(positional, kwargs, line, ctx),
+        "chacha20_poly1305_encrypt" => modern::chacha20_poly1305_encrypt(positional, kwargs, line, ctx),
+        "chacha20_poly1305_decrypt" => modern::chacha20_poly1305_decrypt(positional, kwargs, line, ctx),
+        "encrypt"                   => modern::encrypt(positional, kwargs, line, ctx),
+        "decrypt"                   => modern::decrypt(positional, kwargs, line, ctx),
+        "random_bytes"              => modern::random_bytes(positional, kwargs, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }
