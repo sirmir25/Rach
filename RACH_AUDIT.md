@@ -173,20 +173,53 @@ Branch: `harden/parser-robustness`.
   `tests/oop.rs` (5). Docs: README "Structs and methods", REFERENCE.md §2.4 + formal grammar
   §8. Example: `examples/oop.rach` (wired into CI's offline-examples list).
 
+### Done — follow-up pass (edge-case tests, interpreter fuzzing, clippy::pedantic)
+
+- **OOP edge-case coverage**: `tests/oop.rs` grew from 5 to 9 tests — a method calling another
+  method on `self` (from within the same `impl`), `self`-mutation write-back through a *nested*
+  struct field (`line.a.move(...)`, where `a` is itself a struct), two structs defining a
+  same-named method without colliding, and calling a method on a non-struct value failing
+  cleanly. `examples/oop_composition.rach` demonstrates all of it; wired into CI.
+- **Interpreter-level fuzzing** (previously flagged as needing a generator): `tests/fuzz_interp.rs`
+  generates programs from a fixed, always-parseable skeleton with randomized expression holes
+  (literals, indices, field/method calls, arithmetic) instead of random text, so it actually
+  reaches `eval_expr`/`eval_binary`/stdlib dispatch — `tests/fuzz.rs`'s random text almost never
+  gets past the parser. **Found and fixed three real crash bugs on the first pass**: `-i64::MIN`
+  and `abs(i64::MIN)` both panicked (checked negation/abs has no positive counterpart for that
+  value — reachable from ordinary `x * x` on large ints, since `eval_binary`'s `f64` round trip
+  saturates to exactly `i64::MIN`); both fixed by promoting to float on overflow. `for i in <huge
+  non-negative int>:` built an N-element `Vec<Value>` eagerly, so `for i in 999999999999:` OOM-
+  aborted the process (not even catchable by `try/rescue`) before running a single iteration;
+  fixed by iterating a lazy `Range` instead. Regression test in `tests/runtime.rs` for the first;
+  the fuzzer itself exercises all three every run.
+- **`clippy::pedantic`**: `cargo clippy --fix -- -W clippy::pedantic` plus a hand-verified batch
+  of the `let...else`/`format_push_string`/`assigning_clones` suggestions clippy marks
+  correct-but-not-machine-applicable (had to hand-fix one `--fix` output that used an ugly
+  fully-qualified path, and hand-complete one `unnecessary_wraps` suggestion whose two-part fix
+  — signature *and* body — I'd applied only half of, plus two `write!` call sites that needed a
+  `use std::fmt::Write` clippy's suggestion didn't add). Net: ~1500 → ~600 occurrences. What's
+  left is a deliberate, documented `#![allow(...)]` in `src/lib.rs`/`src/main.rs` — see the
+  comment there for why each category (missing_errors_doc, the `cast_*` family,
+  needless_continue, too_many_lines, and a few judgement-call lints) isn't worth chasing further
+  in this codebase. Default `cargo clippy -- -D warnings` (the CI gate) was clean before and
+  after; build/tests unaffected throughout.
+
 ### Left (needs direction / external deps)
 
 - **CI workflow** (Phase 8) fmt gate: `cargo fmt --check` is still deliberately not gated (see
   the CI section above — the codebase's compact one-line style predates this session and
   rustfmt would rewrite it wholesale). No change here.
-- **Corpus fuzzing beyond the front-end**: `tests/fuzz.rs` only fuzzes lexer→parser. Fuzzing
-  the interpreter (random-but-well-formed ASTs) would need a generator and is a bigger lift —
-  not attempted this pass.
+- **Corpus fuzzing beyond well-formed programs**: `tests/fuzz_interp.rs` generates programs from
+  one fixed skeleton with randomized leaves — good at finding numeric/dispatch edge cases, but
+  it never varies control-flow *shape* (no nested user-defined blocks, no varying struct/impl
+  counts). A true random-AST generator would cover more ground; not attempted this pass.
 
 ### Next step
 
-The audit's outstanding P1/P2 items (diagnostics spans, tests, thiserror, insta, criterion) are
-now all closed. Candidates for a future pass, roughly in priority order: extend OOP with a
-second struct-like construct if a concrete need shows up (kept deliberately minimal — no
-inheritance/traits — since nothing in the existing stdlib or examples asked for one yet);
-interpreter-level fuzzing; and clearing the remaining `clippy::pedantic` backlog (mechanical,
-not correctness-bearing) if a stricter lint gate is ever wanted.
+The audit's outstanding P1/P2 items (diagnostics spans, tests, thiserror, insta, criterion,
+interpreter fuzzing, OOP edge cases, clippy::pedantic) are now all closed. Candidates for a
+future pass: extend OOP with a second struct-like construct if a concrete need shows up (kept
+deliberately minimal — no inheritance/traits — since nothing in the existing stdlib or examples
+asked for one yet); a random-AST-shaped fuzzer (see above); and the small `cast_possible_wrap`/
+`cast_possible_truncation` residue left in `tests/`/`benches/` (not part of the lib/bin crates,
+so the `#![allow]` doesn't reach them — harmless either way since they're pedantic-only).

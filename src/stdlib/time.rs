@@ -78,10 +78,10 @@ pub fn format_time(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, Runt
 /// Algorithm from Howard Hinnant's date library — `civil_from_days`.
 fn unix_to_ymd(secs: u64) -> (i64, u32, u32) {
     let days = (secs / SECS_PER_DAY) as i64;
-    let z = days + 719468;
-    let era = z.div_euclid(146097);
-    let doe = z.rem_euclid(146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
     let y = yoe as i64 + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;

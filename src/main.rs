@@ -1,3 +1,23 @@
+// Same deliberate `clippy::pedantic` allow-list as `src/lib.rs` (rationale there) — this
+// bin crate root needs its own copy since attributes on the lib crate don't cross the
+// crate boundary.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::needless_continue,
+    clippy::too_many_lines,
+    clippy::match_same_arms,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::many_single_char_names,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::float_cmp
+)]
+
 use rach::{interpreter, lexer, parser, repl};
 
 use std::env;

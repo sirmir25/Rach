@@ -10,6 +10,7 @@
 //!   ascii table(headers="A,B,C", rows="1,2,3;4,5,6")
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use crate::ast::Value;
 use crate::interpreter::RuntimeError;
@@ -222,7 +223,7 @@ pub fn table(_args: &[Value], kwargs: &BTreeMap<String, Vec<Value>>, line: usize
         for (i, cell) in r.iter().enumerate() {
             let w = widths.get(i).copied().unwrap_or(0);
             let pad = w - cell.chars().count();
-            out.push_str(&format!(" {}{} |", cell, " ".repeat(pad)));
+            let _ = write!(out, " {}{} |", cell, " ".repeat(pad));
         }
         out
     };

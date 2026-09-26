@@ -727,9 +727,9 @@ fn match_pattern(pat: &MatchPattern, val: &Value, bindings: &mut HashMap<String,
         }
         MatchPattern::Literal(lit) => values_equal(val, lit),
         MatchPattern::Range { lo, hi, inclusive } => {
-            let v = match val.as_f64() { Some(f) => f, None => return false };
-            let l = match lo.as_f64() { Some(f) => f, None => return false };
-            let h = match hi.as_f64() { Some(f) => f, None => return false };
+            let Some(v) = val.as_f64() else { return false };
+            let Some(l) = lo.as_f64() else { return false };
+            let Some(h) = hi.as_f64() else { return false };
             if *inclusive { v >= l && v <= h } else { v >= l && v < h }
         }
         MatchPattern::Or(alts) => {
@@ -739,10 +739,7 @@ fn match_pattern(pat: &MatchPattern, val: &Value, bindings: &mut HashMap<String,
             })
         }
         MatchPattern::List { items, rest } => {
-            let elems = match val {
-                Value::List(xs) => xs,
-                _ => return false,
-            };
+            let Value::List(elems) = val else { return false };
             if rest.is_none() && elems.len() != items.len() { return false; }
             if rest.is_some() && elems.len() < items.len() { return false; }
             for (i, item_pat) in items.iter().enumerate() {

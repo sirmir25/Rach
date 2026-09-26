@@ -62,7 +62,7 @@ pub fn run() -> i32 {
         }
 
         // Update ctx.source so error messages can quote the current input.
-        ctx.source = combined.clone();
+        ctx.source.clone_from(&combined);
 
         let tokens = match lexer::tokenize(&combined) {
             Ok(t) => t,

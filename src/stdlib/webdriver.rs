@@ -4,6 +4,7 @@
 //! over plain HTTP/1.1. No external HTTP/TLS deps — we only ever connect to
 //! 127.0.0.1, so a tiny hand-rolled client is sufficient and dependency-free.
 
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
@@ -138,7 +139,7 @@ fn install_hint(preferred: Option<&str>, last_err: Option<String>) -> String {
          apt install firefox                 # Linux — Firefox\n    \
          /usr/bin/safaridriver --enable      # macOS Safari — one-time, then enable Remote Automation in Develop menu"
     );
-    if let Some(e) = last_err { msg.push_str(&format!("\n  last error: {e}")); }
+    if let Some(e) = last_err { let _ = write!(msg, "\n  last error: {e}"); }
     msg
 }
 
@@ -369,7 +370,7 @@ fn http_request(port: u16, method: &str, path: &str, body: Option<&str>) -> Resu
     );
     if body.is_some() {
         req.push_str("Content-Type: application/json\r\n");
-        req.push_str(&format!("Content-Length: {}\r\n", body_bytes.len()));
+        let _ = write!(req, "Content-Length: {}\r\n", body_bytes.len());
     }
     req.push_str("\r\n");
     stream.write_all(req.as_bytes())?;

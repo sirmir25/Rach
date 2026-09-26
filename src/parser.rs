@@ -103,10 +103,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
                 if is_str { break; }
                 p.next();
                 let name_tok = p.next().ok_or_else(|| ParseError::at(Some(&tok), "expected module name"))?;
-                let name = match name_tok.tok {
-                    Tok::Word(s) => s,
-                    _ => return Err(ParseError::at(Some(&name_tok), "expected module name")),
-                };
+                let Tok::Word(name) = name_tok.tok else { return Err(ParseError::at(Some(&name_tok), "expected module name")) };
                 imports.push(name);
                 p.expect_newline()?;
                 p.skip_newlines();
@@ -187,10 +184,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
 fn parse_impl(p: &mut P) -> Result<ImplBlock, ParseError> {
     let header = p.expect_word("impl")?;
     let name_tok = p.next().ok_or_else(|| ParseError::at(Some(&header), "expected struct name after `impl`"))?;
-    let name = match name_tok.tok {
-        Tok::Word(s) => s,
-        _ => return Err(ParseError::at(Some(&name_tok), "expected struct name after `impl`")),
-    };
+    let Tok::Word(name) = name_tok.tok else { return Err(ParseError::at(Some(&name_tok), "expected struct name after `impl`")) };
     p.expect_tok(&Tok::Colon, "`:`")?;
     p.expect_newline()?;
     p.skip_newlines();
@@ -221,10 +215,7 @@ fn expect_end_marker(p: &mut P) -> Result<(), ParseError> {
 fn parse_struct(p: &mut P) -> Result<StructDef, ParseError> {
     let header = p.expect_word("struct")?;
     let name_tok = p.next().ok_or_else(|| ParseError::at(Some(&header), "expected struct name"))?;
-    let name = match name_tok.tok {
-        Tok::Word(s) => s,
-        _ => return Err(ParseError::at(Some(&name_tok), "expected struct name")),
-    };
+    let Tok::Word(name) = name_tok.tok else { return Err(ParseError::at(Some(&name_tok), "expected struct name")) };
     p.expect_tok(&Tok::LBrace, "`{`")?;
     let mut fields: Vec<String> = Vec::new();
     loop {
@@ -243,10 +234,7 @@ fn parse_struct(p: &mut P) -> Result<StructDef, ParseError> {
 fn parse_function(p: &mut P) -> Result<Function, ParseError> {
     let header = p.expect_word("rach")?;
     let name_tok = p.next().ok_or_else(|| ParseError::at(Some(&header), "expected function name"))?;
-    let name = match name_tok.tok {
-        Tok::Word(s) => s,
-        _ => return Err(ParseError::at(Some(&name_tok), "expected function name")),
-    };
+    let Tok::Word(name) = name_tok.tok else { return Err(ParseError::at(Some(&name_tok), "expected function name")) };
     p.expect_tok(&Tok::LParen, "`(`")?;
 
     let mut params: Vec<String> = Vec::new();
@@ -381,7 +369,7 @@ fn parse_block_inner(p: &mut P, min_indent_col: usize) -> Result<Vec<Stmt>, Pars
 /// Parses a mini-statement inside `for (init; cond; step)` — no trailing newline.
 /// Handles: `set x = expr`, `x = expr`, `x++`, `x--`, `x += expr`.
 fn parse_cfor_mini_stmt(p: &mut P) -> Result<Option<Stmt>, ParseError> {
-    let tok = match p.peek().cloned() { Some(t) => t, None => return Ok(None) };
+    let Some(tok) = p.peek().cloned() else { return Ok(None) };
     let line = tok.line;
 
     // Extract name and consume tokens up to the operator.
@@ -537,10 +525,7 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
     if word == "error" {
         p.next();
         let code_tok = p.next().ok_or_else(|| ParseError::at(Some(&head), "expected error code"))?;
-        let code = match code_tok.tok {
-            Tok::Int(n) => n,
-            _ => return Err(ParseError::at(Some(&code_tok), "expected error code (int)")),
-        };
+        let Tok::Int(code) = code_tok.tok else { return Err(ParseError::at(Some(&code_tok), "expected error code (int)")) };
         let mut line_ref = 0i64;
         if let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
             if w == "string" {
@@ -568,10 +553,7 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         let is_const = word == "const";
         p.next();
         let name_tok = p.next().ok_or_else(|| ParseError::at(None, "expected variable name"))?;
-        let name = match name_tok.tok {
-            Tok::Word(s) => s,
-            _ => return Err(ParseError::at(Some(&name_tok), "expected variable name")),
-        };
+        let Tok::Word(name) = name_tok.tok else { return Err(ParseError::at(Some(&name_tok), "expected variable name")) };
         p.expect_tok(&Tok::Equals, "`=`")?;
         let expr = parse_expr(p)?;
         p.expect_newline()?;
@@ -594,7 +576,7 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
 
         if is_legacy_os {
             let os_tok = p.next().unwrap();
-            let os = match os_tok.tok { Tok::Word(s) => s, _ => unreachable!() };
+            let Tok::Word(os) = os_tok.tok else { unreachable!() };
             p.expect_tok(&Tok::Colon, "`:`")?;
             p.expect_newline()?;
             let body = parse_block(p, head_col)?;
@@ -716,10 +698,7 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
             return Ok(Stmt::CFor { init: init.map(Box::new), cond, step: step.map(Box::new), body, line: head_line });
         }
         let var_tok = p.next().ok_or_else(|| ParseError::at(None, "expected loop variable"))?;
-        let first_var = match var_tok.tok {
-            Tok::Word(s) => s,
-            _ => return Err(ParseError::at(Some(&var_tok), "expected loop variable")),
-        };
+        let Tok::Word(first_var) = var_tok.tok else { return Err(ParseError::at(Some(&var_tok), "expected loop variable")) };
         // tuple unpacking: `for i, item in ...`
         let mut vars = vec![first_var];
         while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Comma)) {
@@ -835,13 +814,12 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
             let (action, argument) = parse_bash_dsl_rhs(p)?;
             p.expect_newline()?;
             return Ok(Stmt::BashDsl { action, argument, line: head_line });
-        } else {
-            p.next();
-            p.next();
-            let expr = parse_expr(p)?;
-            p.expect_newline()?;
-            return Ok(Stmt::Assign { target: AssignTarget::Name(word), expr, is_const: false, line: head_line });
         }
+        p.next();
+        p.next();
+        let expr = parse_expr(p)?;
+        p.expect_newline()?;
+        return Ok(Stmt::Assign { target: AssignTarget::Name(word), expr, is_const: false, line: head_line });
     }
 
     if let Some(op_tok) = next1.as_ref().and_then(compound_op) {
@@ -948,10 +926,7 @@ fn try_parse_place_assign(p: &mut P, base_name: &str, line: usize) -> Result<Opt
                 }
                 p.next();
                 let ft = p.next().ok_or_else(|| ParseError::at(None, "expected field name after `.`"))?;
-                let fname = match ft.tok {
-                    Tok::Word(s) => s,
-                    _ => return Err(ParseError::at(Some(&ft), "expected field name after `.`")),
-                };
+                let Tok::Word(fname) = ft.tok else { return Err(ParseError::at(Some(&ft), "expected field name after `.`")) };
                 last_field = Some(fname);
             }
             Some(Tok::LBracket) => {
@@ -1078,7 +1053,7 @@ fn parse_call_or_fncall_stmt(p: &mut P, line: usize) -> Result<Stmt, ParseError>
 fn parse_call_segments(p: &mut P) -> Result<Vec<CallSegment>, ParseError> {
     let mut segments: Vec<CallSegment> = Vec::new();
     loop {
-        let words = collect_word_run(p)?;
+        let words = collect_word_run(p);
         if words.is_empty() { break; }
         if !matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::LParen)) {
             return Err(ParseError::at(p.peek(), format!("expected `(` after `{}`", words.join(" "))));
@@ -1092,7 +1067,7 @@ fn parse_call_segments(p: &mut P) -> Result<Vec<CallSegment>, ParseError> {
     Ok(segments)
 }
 
-fn collect_word_run(p: &mut P) -> Result<Vec<String>, ParseError> {
+fn collect_word_run(p: &mut P) -> Vec<String> {
     let mut out = Vec::new();
     while let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
         if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Equals)) {
@@ -1101,7 +1076,7 @@ fn collect_word_run(p: &mut P) -> Result<Vec<String>, ParseError> {
         p.next();
         out.push(w);
     }
-    Ok(out)
+    out
 }
 
 fn parse_arglist(p: &mut P) -> Result<(Vec<Expr>, BTreeMap<String, Expr>), ParseError> {
@@ -1364,10 +1339,7 @@ fn parse_postfix_chain(p: &mut P, mut target: Expr) -> Result<Expr, ParseError> 
                 let line = p.peek().map_or(0, |t| t.line);
                 p.next();
                 let nt = p.next().ok_or_else(|| ParseError::at(None, "expected field name after `.`"))?;
-                let name = match nt.tok {
-                    Tok::Word(s) => s,
-                    _ => return Err(ParseError::at(Some(&nt), "expected field name after `.`")),
-                };
+                let Tok::Word(name) = nt.tok else { return Err(ParseError::at(Some(&nt), "expected field name after `.`")) };
                 target = Expr::Field { target: Box::new(target), name, line };
             }
             Some(Tok::LParen) => {
@@ -1485,10 +1457,7 @@ fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
                 p.next(); // module word
                 p.next(); // ::
                 let nt = p.next().ok_or_else(|| ParseError::at(None, "expected name after `::`"))?;
-                let nm = match nt.tok {
-                    Tok::Word(s) => s,
-                    _ => return Err(ParseError::at(Some(&nt), "expected name after `::`")),
-                };
+                let Tok::Word(nm) = nt.tok else { return Err(ParseError::at(Some(&nt), "expected name after `::`")) };
                 let combined = format!("{w}_{nm}");
                 if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::LParen)) {
                     let line = head.line;
@@ -1540,22 +1509,21 @@ fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
                     let line = head.line;
                     let segments = parse_call_segments(p)?;
                     return Ok(Expr::Call { segments, line });
-                } else {
-                    let _ = p.next();
-                    p.expect_tok(&Tok::LParen, "`(`")?;
-                    let mut args = Vec::new();
-                    loop {
-                        match p.peek().map(|t| t.tok.clone()) {
-                            Some(Tok::RParen) => { p.next(); break; }
-                            Some(Tok::Comma) => { p.next(); continue; }
-                            _ => {
-                                let e = parse_expr(p)?;
-                                args.push(e);
-                            }
+                }
+                let _ = p.next();
+                p.expect_tok(&Tok::LParen, "`(`")?;
+                let mut args = Vec::new();
+                loop {
+                    match p.peek().map(|t| t.tok.clone()) {
+                        Some(Tok::RParen) => { p.next(); break; }
+                        Some(Tok::Comma) => { p.next(); continue; }
+                        _ => {
+                            let e = parse_expr(p)?;
+                            args.push(e);
                         }
                     }
-                    return Ok(Expr::FnCall { name: w, args, line: head.line });
                 }
+                return Ok(Expr::FnCall { name: w, args, line: head.line });
             }
 
             if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Word(_))) {
