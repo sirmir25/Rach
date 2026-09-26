@@ -1,0 +1,42 @@
+# Encodings, hashes and ciphers — all hand-written in Rach's stdlib, no libraries.
+# Results are captured into variables first: a command called as a statement or inside
+# print(...) prints its own `name: value` line, one assigned to a variable doesn't.
+
+# --- encodings ---
+b64 = base64_encode("Ada Lovelace")
+plain = base64_decode(b64)
+b58 = base58_encode("Hello World!")
+sos = morse_encode("SOS")
+privet = morse_encode("Привет", alphabet="ru")
+print(f"base64:   {b64} -> {plain}")
+print(f"base58:   {b58}")
+print(f"morse:    {sos}   морзе: {privet}")
+
+# --- hashes ---
+digest = sha256("abc")
+mac = hmac("message", "key")
+print(f"sha256:   {digest}")
+print(f"hmac:     {mac}")
+
+# --- classical ciphers, 1850s–1918 ---
+notes = "The distinctive characteristic of the Analytical Engine, and that which has rendered it possible to endow mechanism with such extensive faculties as bid fair to make this engine the executive right-hand of abstract algebra, is the introduction into it of the principle which Jacquard devised for regulating, by means of punched cards, the most complicated patterns in the fabrication of brocaded stuffs."
+secret = vigenere_encrypt(notes, "BABBAGE")
+cracked = vigenere_crack(secret)
+key = cracked["key"]
+head = slice(secret, 0, 48)
+print(f"vigenere: {head}...")
+print(f"cracked the way Babbage did (1854): key = {key}")
+pf = playfair_encrypt("hide the gold in the tree stump", "playfair example")
+en = enigma("HELLOWORLD", rotors="I II III", positions="AAA")
+print(f"playfair: {pf}")
+print(f"enigma:   {en}")
+
+# --- modern: authenticated encryption with a password ---
+token = encrypt("meet at the engine room", "hunter2", iterations=20000)
+opened = decrypt(token, "hunter2")
+print(f"token:    {token}")
+print(f"decrypt:  {opened}")
+try:
+    wrong = decrypt(token, "hunter3")
+rescue as e:
+    print(f"wrong password -> {e["message"]}")

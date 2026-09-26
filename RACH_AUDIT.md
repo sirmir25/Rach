@@ -204,6 +204,45 @@ Branch: `harden/parser-robustness`.
   in this codebase. Default `cargo clippy -- -D warnings` (the CI gate) was clean before and
   after; build/tests unaffected throughout.
 
+### Done — crypto & ASCII-art pass (all hand-rolled, no new crates)
+
+- **Encodings** (`stdlib/encoding.rs`): base64/base64url, base32, base58, Ascii85, hex, binary,
+  URL. `stdlib/args.rs` sets the byte convention every byte-oriented module uses
+  (`input="hex"` / `output="hex"`, since Rach has no byte-string type).
+- **Hashes** (`stdlib/hash.rs`): MD5, SHA-1/256/512, HMAC, PBKDF2, CRC-32, Adler-32, FNV-1a.
+  Round constants generated with exact integer arithmetic, not transcribed.
+- **Classical ciphers** (`stdlib/cipher.rs`), English and Russian alphabets: Caesar/ROT/Atbash/
+  affine, Vigenère/Beaufort/autokey, Playfair, rail fence, columnar, Polybius, Bifid, ADFGVX,
+  Bacon, Morse (incl. Russian). **Cryptanalysis**: Babbage/Friedman-style `vigenere_crack`,
+  `caesar_crack`, IC, letter frequencies. **Enigma I/M3** (`stdlib/enigma.rs`) with double
+  stepping, verified on a real 1941 Operation Barbarossa intercept.
+- **Modern** (`stdlib/modern.rs`): AES-128/192/256 (ECB/CBC/CTR), ChaCha20, Poly1305,
+  ChaCha20-Poly1305, password `encrypt`/`decrypt` (PBKDF2 + AEAD), XOR/RC4 (historical),
+  `random_bytes` via /dev/urandom or BCryptGenRandom. Official vectors (FIPS-197, SP 800-38A,
+  RFC 8439) pass; documented as unaudited and not constant-time for AES.
+- **ASCII art** (`stdlib/canvas.rs`, `ascii_art.rs`, `image.rs`): raster canvas with braille /
+  half-block / block / ramp renderers and dithering; `ascii_text` (5×7 font, ASCII + Cyrillic),
+  sparkline, bars, progress, braille line plot, tree, Mandelbrot, circle, and `ascii_image`
+  with BMP (incl. RLE4/RLE8) and Netpbm decoders cross-checked against ImageMagick.
+- **Conversions** (`stdlib/convert.rs`): `int`, `float`, `str`, `bool`, `type_of` — Rach
+  previously had no float→int conversion at all.
+
+Found and fixed along the way:
+- **Regression from adding stdlib names**: a user function called `hex`/`index`/… stopped
+  working because `is_known_command` treats a word that prefixes a command (`hex_encode`) as a
+  command. Fixed at the root: user-defined functions now shadow stdlib commands.
+- **Hostile-image DoS**: the image-parser mutation fuzzer found that RLE BMPs / ASCII Netpbm
+  headers could make a 60-byte file allocate hundreds of MB; implausible sizes are now rejected
+  before allocating.
+- Half-pixel sampling offset in the Mandelbrot renderer (caught by a symmetry test).
+
+Known gaps, deliberately not done this pass: PNG/JPEG decoding (needs an inflater / DCT — clear
+error pointing at conversion instead); `vigenere_crack` needs ~40+ letters per key letter and
+can return a wrong key on shorter text without saying so; a command called inside an
+expression that isn't directly assigned (e.g. inside `print(f"{sha256(x)}")`) still prints its
+own `name: value` line — long-standing capture-mode behaviour, left unchanged here because
+changing it touches every stdlib command's output.
+
 ### Left (needs direction / external deps)
 
 - **CI workflow** (Phase 8) fmt gate: `cargo fmt --check` is still deliberately not gated (see
