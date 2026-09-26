@@ -5,6 +5,7 @@ pub mod bash;
 pub mod collections;
 pub mod drivers;
 pub mod encoding;
+pub mod hash;
 pub mod http;
 pub mod io;
 pub mod json;
@@ -77,6 +78,8 @@ const KNOWN: &[&str] = &[
     "base58_encode", "base58_decode", "ascii85_encode", "ascii85_decode",
     "hex_encode", "hex_decode", "binary_encode", "binary_decode",
     "url_encode", "url_decode",
+    // hashing
+    "md5", "sha1", "sha256", "sha512", "crc32", "adler32", "fnv1a", "hmac", "pbkdf2",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -346,6 +349,17 @@ pub fn dispatch(
         "binary_decode"  => encoding::binary_decode(positional, kwargs, line, ctx),
         "url_encode"     => encoding::url_encode(positional, kwargs, line, ctx),
         "url_decode"     => encoding::url_decode(positional, kwargs, line, ctx),
+
+        // ---- hashing ----
+        "md5"     => hash::md5(positional, kwargs, line, ctx),
+        "sha1"    => hash::sha1(positional, kwargs, line, ctx),
+        "sha256"  => hash::sha256(positional, kwargs, line, ctx),
+        "sha512"  => hash::sha512(positional, kwargs, line, ctx),
+        "crc32"   => hash::crc32(positional, kwargs, line, ctx),
+        "adler32" => hash::adler32(positional, kwargs, line, ctx),
+        "fnv1a"   => hash::fnv1a(positional, kwargs, line, ctx),
+        "hmac"    => hash::hmac(positional, kwargs, line, ctx),
+        "pbkdf2"  => hash::pbkdf2(positional, kwargs, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }
