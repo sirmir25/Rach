@@ -418,11 +418,17 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
         }
         Stmt::For { vars, iter, body, line } => {
             let v = eval_expr(iter, ctx)?;
-            let items: Vec<Value> = match v {
-                Value::List(xs) => xs,
-                Value::Map(m) => m.into_keys().map(Value::Str).collect(),
-                Value::Str(s) => s.split(',').map(|x| Value::Str(x.trim().to_string())).collect(),
-                Value::Int(n) if n >= 0 => (0..n).map(Value::Int).collect(),
+            // `for i in <huge non-negative int>:` must not eagerly build a `Vec` of that
+            // many `Value`s — a user writing `for i in 999999999999:` would otherwise abort
+            // the process on the allocation (an OOM abort, unlike a panic, isn't even
+            // catchable by `try/rescue`) before running a single iteration. A lazy `Range`
+            // costs O(1) memory; the loop still takes as long as the count implies, same as
+            // any other user-authored long loop.
+            let items: Box<dyn Iterator<Item = Value>> = match v {
+                Value::List(xs) => Box::new(xs.into_iter()),
+                Value::Map(m) => Box::new(m.into_keys().map(Value::Str).collect::<Vec<_>>().into_iter()),
+                Value::Str(s) => Box::new(s.split(',').map(|x| Value::Str(x.trim().to_string())).collect::<Vec<_>>().into_iter()),
+                Value::Int(n) if n >= 0 => Box::new((0..n).map(Value::Int)),
                 other => {
                     return Err(RuntimeError::new(400, *line, format!("for: cannot iterate over {:?}", other)));
                 }
@@ -1474,7 +1480,11 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, Ru
 fn eval_unary(op: UnaryOp, v: &Value, line: usize) -> Result<Value, RuntimeError> {
     match op {
         UnaryOp::Neg => match v {
-            Value::Int(n) => Ok(Value::Int(-n)),
+            // `i64::MIN` has no positive counterpart, so plain `-n` would panic (checked
+            // negation) in a debug build. Promote to float rather than crash on one
+            // pathological value — the same "auto-promote when exact int math doesn't
+            // fit" rule `eval_binary` already applies.
+            Value::Int(n) => Ok(n.checked_neg().map_or_else(|| Value::Float(-(*n as f64)), Value::Int)),
             Value::Float(f) => Ok(Value::Float(-f)),
             other => {
                 let f = other.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot negate {:?}", other)))?;

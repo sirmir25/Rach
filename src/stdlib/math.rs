@@ -78,7 +78,9 @@ pub fn pow(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError
 pub fn abs(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let v = args.first().ok_or_else(|| RuntimeError::new(400, line, "abs requires arg"))?;
     let result = match v {
-        Value::Int(n) => Value::Int(n.abs()),
+        // `i64::MIN.abs()` panics (checked overflow, no positive counterpart) — promote to
+        // float for that one value instead of crashing, same rule `eval_unary`'s `Neg` uses.
+        Value::Int(n) => n.checked_abs().map_or_else(|| Value::Float((*n as f64).abs()), Value::Int),
         Value::Float(f) => Value::Float(f.abs()),
         other => Value::Float(other.as_f64()
             .ok_or_else(|| RuntimeError::new(400, line, format!("abs: not a number: {:?}", other)))?

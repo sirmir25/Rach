@@ -32,3 +32,12 @@ fn bounded_recursion_still_runs() {
     let src = "rach fact(n)\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)\nreturn(end)\n(end0)\n\nrach main(0)\n    set _ = fact(10)\nreturn(end)\n(end0)\n";
     run(src).expect("a bounded recursive program must complete");
 }
+
+/// `-i64::MIN` has no `i64` representation, so a plain `-n` would abort the process
+/// (checked negation panics in a debug build) instead of surfacing as a Rach-level value.
+/// Found by fuzzing arithmetic that lands exactly on `i64::MIN` via a large multiply.
+#[test]
+fn negating_i64_min_does_not_panic() {
+    let src = "x = 100000000000000 * -100000000000000\ny = -x\n";
+    run(src).expect("negating i64::MIN must promote to float, not panic");
+}
