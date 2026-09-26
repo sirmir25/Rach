@@ -81,7 +81,7 @@ fn gen_expr(rng: &mut Rng, depth: u32) -> String {
             6 => {
                 let a = 100_000_000_000_i64 + rng.below(900_000_000_000) as i64;
                 let b = if rng.bool() { a } else { -a };
-                format!("({} * {})", a, b)
+                format!("({a} * {b})")
             }
             _ => VARS[rng.below(VARS.len())].to_string(),
         };
@@ -159,7 +159,7 @@ fn fuzz_one(src: String) {
             }
         }
     }));
-    assert!(result.is_ok(), "interpreter panicked on generated program:\n{}", src);
+    assert!(result.is_ok(), "interpreter panicked on generated program:\n{src}");
 }
 
 #[test]

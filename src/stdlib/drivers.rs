@@ -1,4 +1,4 @@
-//! WebDriver auto-installer.
+//! `WebDriver` auto-installer.
 //!
 //! Resolves a usable driver binary in this priority order:
 //!   1. `$PATH`        — user-installed (`brew install --cask chromedriver` etc.)
@@ -14,6 +14,7 @@ use serde_json::Value as Json;
 
 const GECKODRIVER_VERSION: &str = "0.36.0";
 
+#[must_use]
 pub fn driver_dir() -> PathBuf {
     if let Ok(d) = std::env::var("RACH_DRIVER_DIR") {
         return PathBuf::from(d);
@@ -30,6 +31,7 @@ pub fn driver_dir() -> PathBuf {
     }
 }
 
+#[must_use]
 pub fn firefox_installed() -> bool {
     if which("firefox").is_some() { return true; }
     if cfg!(target_os = "macos") {
@@ -42,6 +44,7 @@ pub fn firefox_installed() -> bool {
     false
 }
 
+#[must_use]
 pub fn chrome_installed() -> bool {
     for n in &["google-chrome", "google-chrome-stable", "chromium-browser", "chromium", "chrome"] {
         if which(n).is_some() { return true; }
@@ -65,6 +68,7 @@ pub fn chrome_installed() -> bool {
     false
 }
 
+#[must_use]
 pub fn edge_installed() -> bool {
     if which("microsoft-edge").is_some() { return true; }
     if cfg!(target_os = "macos") {
@@ -85,8 +89,7 @@ pub fn ensure_geckodriver() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {}", dir.display(), e))?;
     let asset = geckodriver_asset()?;
     let url = format!(
-        "https://github.com/mozilla/geckodriver/releases/download/v{}/{}",
-        GECKODRIVER_VERSION, asset
+        "https://github.com/mozilla/geckodriver/releases/download/v{GECKODRIVER_VERSION}/{asset}"
     );
     let archive = dir.join(&asset);
     eprintln!(
@@ -116,7 +119,7 @@ pub fn ensure_chromedriver() -> Result<PathBuf, String> {
     let api = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
     eprintln!("// rach: querying Chrome for Testing for latest stable chromedriver...");
     let json = curl_to_string(api)?;
-    let v: Json = serde_json::from_str(&json).map_err(|e| format!("parse CfT json: {}", e))?;
+    let v: Json = serde_json::from_str(&json).map_err(|e| format!("parse CfT json: {e}"))?;
 
     let plat = chrome_platform()?;
     let downloads = v.pointer("/channels/Stable/downloads/chromedriver")
@@ -126,11 +129,11 @@ pub fn ensure_chromedriver() -> Result<PathBuf, String> {
     let url = downloads.iter()
         .find(|d| d.get("platform").and_then(|p| p.as_str()) == Some(plat))
         .and_then(|d| d.get("url").and_then(|u| u.as_str()))
-        .ok_or_else(|| format!("no chromedriver download for platform `{}`", plat))?
+        .ok_or_else(|| format!("no chromedriver download for platform `{plat}`"))?
         .to_string();
 
     let archive = dir.join("chromedriver.zip");
-    eprintln!("// rach: downloading chromedriver from {}...", url);
+    eprintln!("// rach: downloading chromedriver from {url}...");
     run_curl(&url, &archive)?;
     extract(&archive, &dir)?;
     let _ = std::fs::remove_file(&archive);
@@ -140,7 +143,7 @@ pub fn ensure_chromedriver() -> Result<PathBuf, String> {
     let found = find_file_recursive(&dir, want)
         .ok_or_else(|| "chromedriver binary not found after extract".to_string())?;
     if found != bin && std::fs::rename(&found, &bin).is_err() {
-        std::fs::copy(&found, &bin).map_err(|e| format!("copy chromedriver: {}", e))?;
+        std::fs::copy(&found, &bin).map_err(|e| format!("copy chromedriver: {e}"))?;
     }
     chmod_exec(&bin)?;
     Ok(bin)
@@ -157,7 +160,7 @@ fn chrome_platform() -> Result<&'static str, String> {
         ("linux", "x86_64")  => "linux64",
         ("windows", "x86_64") => "win64",
         ("windows", "x86")   => "win32",
-        _ => return Err(format!("unsupported platform: {}/{}", os, arch)),
+        _ => return Err(format!("unsupported platform: {os}/{arch}")),
     })
 }
 
@@ -166,36 +169,36 @@ fn geckodriver_asset() -> Result<String, String> {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     Ok(match (os, arch) {
-        ("macos",   "aarch64") => format!("geckodriver-v{}-macos-aarch64.tar.gz", v),
-        ("macos",   "x86_64")  => format!("geckodriver-v{}-macos.tar.gz", v),
-        ("linux",   "x86_64")  => format!("geckodriver-v{}-linux64.tar.gz", v),
-        ("linux",   "aarch64") => format!("geckodriver-v{}-linux-aarch64.tar.gz", v),
-        ("windows", "x86_64")  => format!("geckodriver-v{}-win64.zip", v),
-        _ => return Err(format!("unsupported platform: {}/{}", os, arch)),
+        ("macos",   "aarch64") => format!("geckodriver-v{v}-macos-aarch64.tar.gz"),
+        ("macos",   "x86_64")  => format!("geckodriver-v{v}-macos.tar.gz"),
+        ("linux",   "x86_64")  => format!("geckodriver-v{v}-linux64.tar.gz"),
+        ("linux",   "aarch64") => format!("geckodriver-v{v}-linux-aarch64.tar.gz"),
+        ("windows", "x86_64")  => format!("geckodriver-v{v}-win64.zip"),
+        _ => return Err(format!("unsupported platform: {os}/{arch}")),
     })
 }
 
 fn run_curl(url: &str, out: &Path) -> Result<(), String> {
     let s = Command::new("curl").args(["-fSL", "--retry", "2", "-o"]).arg(out).arg(url).status()
-        .map_err(|e| format!("spawn curl: {}", e))?;
-    if !s.success() { return Err(format!("curl failed for {}", url)); }
+        .map_err(|e| format!("spawn curl: {e}"))?;
+    if !s.success() { return Err(format!("curl failed for {url}")); }
     Ok(())
 }
 
 fn curl_to_string(url: &str) -> Result<String, String> {
     let out = Command::new("curl").args(["-fsSL", "--retry", "2", url]).output()
-        .map_err(|e| format!("spawn curl: {}", e))?;
+        .map_err(|e| format!("spawn curl: {e}"))?;
     if !out.status.success() {
         return Err(format!("curl failed for {} (stderr: {})", url, String::from_utf8_lossy(&out.stderr)));
     }
-    String::from_utf8(out.stdout).map_err(|e| format!("curl stdout not utf-8: {}", e))
+    String::from_utf8(out.stdout).map_err(|e| format!("curl stdout not utf-8: {e}"))
 }
 
 fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
     let path_str = archive.to_string_lossy().to_lowercase();
     if path_str.ends_with(".tar.gz") || path_str.ends_with(".tgz") {
         let s = Command::new("tar").args(["-xzf"]).arg(archive).arg("-C").arg(dest).status()
-            .map_err(|e| format!("spawn tar: {}", e))?;
+            .map_err(|e| format!("spawn tar: {e}"))?;
         if !s.success() { return Err("tar extract failed".into()); }
     } else if path_str.ends_with(".zip") {
         if cfg!(target_os = "windows") {
@@ -204,11 +207,11 @@ fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
                 archive.display(), dest.display()
             );
             let s = Command::new("powershell").args(["-NoProfile", "-Command", &cmd]).status()
-                .map_err(|e| format!("spawn powershell: {}", e))?;
+                .map_err(|e| format!("spawn powershell: {e}"))?;
             if !s.success() { return Err("Expand-Archive failed".into()); }
         } else {
             let s = Command::new("unzip").args(["-oq"]).arg(archive).arg("-d").arg(dest).status()
-                .map_err(|e| format!("spawn unzip: {}", e))?;
+                .map_err(|e| format!("spawn unzip: {e}"))?;
             if !s.success() { return Err("unzip failed".into()); }
         }
     } else {
@@ -221,7 +224,7 @@ fn find_file_recursive(root: &Path, name: &str) -> Option<PathBuf> {
     let entries = std::fs::read_dir(root).ok()?;
     for entry in entries.flatten() {
         let p = entry.path();
-        if p.file_name().map(|n| n == name).unwrap_or(false) && p.is_file() {
+        if p.file_name().is_some_and(|n| n == name) && p.is_file() {
             return Some(p);
         }
         if p.is_dir() {
@@ -235,13 +238,14 @@ fn chmod_exec(_p: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(_p).map_err(|e| format!("stat: {}", e))?.permissions();
+        let mut perms = std::fs::metadata(_p).map_err(|e| format!("stat: {e}"))?.permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(_p, perms).map_err(|e| format!("chmod: {}", e))?;
+        std::fs::set_permissions(_p, perms).map_err(|e| format!("chmod: {e}"))?;
     }
     Ok(())
 }
 
+#[must_use]
 pub fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {

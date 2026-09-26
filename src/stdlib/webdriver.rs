@@ -1,4 +1,4 @@
-//! Minimal W3C WebDriver client.
+//! Minimal W3C `WebDriver` client.
 //!
 //! Talks to `chromedriver`, `geckodriver`, or `msedgedriver` running on localhost
 //! over plain HTTP/1.1. No external HTTP/TLS deps — we only ever connect to
@@ -71,7 +71,7 @@ impl Drop for Session {
 /// Resolve driver: PATH → cache → auto-install. Returns the chosen browser
 /// kind plus a path to its driver binary.
 fn find_or_install_driver(preferred: Option<&str>) -> Result<(Browser, PathBuf), WdError> {
-    let pref = preferred.map(|s| s.to_ascii_lowercase());
+    let pref = preferred.map(str::to_ascii_lowercase);
     let order: Vec<Browser> = match pref.as_deref() {
         Some("chrome")  => vec![Browser::Chrome],
         Some("firefox") => vec![Browser::Firefox],
@@ -110,13 +110,13 @@ fn find_or_install_driver(preferred: Option<&str>) -> Result<(Browser, PathBuf),
             Browser::Chrome if drivers::chrome_installed() => {
                 match drivers::ensure_chromedriver() {
                     Ok(p) => return Ok((Browser::Chrome, p)),
-                    Err(e) => last_err = Some(format!("chromedriver auto-install: {}", e)),
+                    Err(e) => last_err = Some(format!("chromedriver auto-install: {e}")),
                 }
             }
             Browser::Firefox if drivers::firefox_installed() => {
                 match drivers::ensure_geckodriver() {
                     Ok(p) => return Ok((Browser::Firefox, p)),
-                    Err(e) => last_err = Some(format!("geckodriver auto-install: {}", e)),
+                    Err(e) => last_err = Some(format!("geckodriver auto-install: {e}")),
                 }
             }
             _ => {}
@@ -129,17 +129,16 @@ fn find_or_install_driver(preferred: Option<&str>) -> Result<(Browser, PathBuf),
 fn install_hint(preferred: Option<&str>, last_err: Option<String>) -> String {
     let want = preferred.unwrap_or("any");
     let mut msg = format!(
-        "no usable WebDriver for `{}`.\n  \
+        "no usable WebDriver for `{want}`.\n  \
          tried: $PATH, ~/.cache/rach/drivers, and auto-install.\n  \
          install a browser so we can auto-download a driver, or install the driver yourself:\n    \
          brew install --cask google-chrome   # macOS — Chrome (auto-fetches chromedriver)\n    \
          brew install --cask firefox         # macOS — Firefox (auto-fetches geckodriver)\n    \
          apt install chromium-browser        # Linux — Chromium (driver via auto-install)\n    \
          apt install firefox                 # Linux — Firefox\n    \
-         /usr/bin/safaridriver --enable      # macOS Safari — one-time, then enable Remote Automation in Develop menu",
-        want
+         /usr/bin/safaridriver --enable      # macOS Safari — one-time, then enable Remote Automation in Develop menu"
     );
-    if let Some(e) = last_err { msg.push_str(&format!("\n  last error: {}", e)); }
+    if let Some(e) = last_err { msg.push_str(&format!("\n  last error: {e}")); }
     msg
 }
 
@@ -150,15 +149,15 @@ pub fn start(preferred: Option<&str>, headless: bool) -> Result<Session, WdError
 
     let mut cmd = Command::new(&driver_path);
     match browser {
-        Browser::Chrome | Browser::Edge => { cmd.arg(format!("--port={}", port)); }
+        Browser::Chrome | Browser::Edge => { cmd.arg(format!("--port={port}")); }
         Browser::Firefox => { cmd.arg("--port").arg(port.to_string()); }
         Browser::Safari => { cmd.arg("--port").arg(port.to_string()); }
     }
     // Pipe driver stderr to /tmp so failures are diagnosable. stdout is
     // chatty and unhelpful — we leave it null.
-    let log_path = std::env::temp_dir().join(format!("rach-driver-{}.log", port));
-    let log_file = std::fs::File::create(&log_path).map_err(|e| WdError(format!("create driver log: {}", e)))?;
-    let log_dup = log_file.try_clone().map_err(|e| WdError(format!("dup log fd: {}", e)))?;
+    let log_path = std::env::temp_dir().join(format!("rach-driver-{port}.log"));
+    let log_file = std::fs::File::create(&log_path).map_err(|e| WdError(format!("create driver log: {e}")))?;
+    let log_dup = log_file.try_clone().map_err(|e| WdError(format!("dup log fd: {e}")))?;
     cmd.stdout(Stdio::from(log_file)).stderr(Stdio::from(log_dup));
 
     let child = cmd.spawn().map_err(|e| WdError(format!("failed to spawn `{}`: {}", driver_path.display(), e)))?;
@@ -179,7 +178,7 @@ pub fn start(preferred: Option<&str>, headless: bool) -> Result<Session, WdError
     let body: Json = serde_json::from_str(&resp.body).map_err(|e| WdError(format!("bad session response: {} — body: {}", e, resp.body)))?;
     let session_id = body.pointer("/value/sessionId")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| WdError(format!("session response missing sessionId: {}", body)))?
+        .ok_or_else(|| WdError(format!("session response missing sessionId: {body}")))?
         .to_string();
 
     Ok(Session { browser, port, session_id, child: Some(child) })
@@ -225,16 +224,16 @@ impl Session {
         let r = http_request(self.port, "POST", &format!("/session/{}/element", self.session_id), Some(&body))?;
         let v: Json = serde_json::from_str(&r.body).map_err(|e| WdError(format!("find_element: {} — {}", e, r.body)))?;
         if let Some(err) = v.pointer("/value/error").and_then(|x| x.as_str()) {
-            return Err(WdError(format!("find_element({}, {}): {}", by, value, err)));
+            return Err(WdError(format!("find_element({by}, {value}): {err}")));
         }
-        let inner = v.get("value").ok_or_else(|| WdError(format!("find_element: no value: {}", v)))?;
+        let inner = v.get("value").ok_or_else(|| WdError(format!("find_element: no value: {v}")))?;
         if let Json::Object(map) = inner {
             // Element ref key is `element-6066-11e4-a52e-4f735466cecf` per W3C
             for val in map.values() {
                 if let Some(s) = val.as_str() { return Ok(s.to_string()); }
             }
         }
-        Err(WdError(format!("find_element: no element id in response: {}", v)))
+        Err(WdError(format!("find_element: no element id in response: {v}")))
     }
 
     pub fn click(&self, element_id: &str) -> Result<(), WdError> {
@@ -267,11 +266,11 @@ impl Session {
     pub fn screenshot(&self, path: &str) -> Result<(), WdError> {
         let url = format!("/session/{}/screenshot", self.session_id);
         let r = http_request(self.port, "GET", &url, None)?;
-        let v: Json = serde_json::from_str(&r.body).map_err(|e| WdError(format!("screenshot: {}", e)))?;
+        let v: Json = serde_json::from_str(&r.body).map_err(|e| WdError(format!("screenshot: {e}")))?;
         let b64 = v.get("value").and_then(|x| x.as_str())
             .ok_or_else(|| WdError("screenshot: no base64 payload".into()))?;
         let bytes = b64_decode(b64)?;
-        std::fs::write(path, bytes).map_err(|e| WdError(format!("write screenshot: {}", e)))?;
+        std::fs::write(path, bytes).map_err(|e| WdError(format!("write screenshot: {e}")))?;
         Ok(())
     }
 
@@ -279,7 +278,7 @@ impl Session {
         let path = format!("/session/{}/window/new", self.session_id);
         let body = json!({ "type": "tab" }).to_string();
         let r = http_request(self.port, "POST", &path, Some(&body))?;
-        let v: Json = serde_json::from_str(&r.body).map_err(|e| WdError(format!("new_window: {}", e)))?;
+        let v: Json = serde_json::from_str(&r.body).map_err(|e| WdError(format!("new_window: {e}")))?;
         if let Some(handle) = v.pointer("/value/handle").and_then(|x| x.as_str()) {
             self.switch_to_window(handle)?;
         }
@@ -290,7 +289,7 @@ impl Session {
     pub fn list_windows(&self) -> Result<Vec<String>, WdError> {
         let path = format!("/session/{}/window/handles", self.session_id);
         let r = http_request(self.port, "GET", &path, None)?;
-        let v: Json = serde_json::from_str(&r.body).map_err(|e| WdError(format!("list_windows: {}", e)))?;
+        let v: Json = serde_json::from_str(&r.body).map_err(|e| WdError(format!("list_windows: {e}")))?;
         let arr = v.get("value").and_then(|x| x.as_array())
             .ok_or_else(|| WdError("list_windows: no array".into()))?;
         Ok(arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
@@ -306,7 +305,7 @@ impl Session {
     pub fn active_element_send_keys(&self, text: &str) -> Result<(), WdError> {
         // Get the active element id, then send keys to it.
         let r = http_request(self.port, "GET", &format!("/session/{}/element/active", self.session_id), None)?;
-        let v: Json = serde_json::from_str(&r.body).map_err(|e| WdError(format!("active_element: {}", e)))?;
+        let v: Json = serde_json::from_str(&r.body).map_err(|e| WdError(format!("active_element: {e}")))?;
         let inner = v.get("value").ok_or_else(|| WdError("active_element: no value".into()))?;
         if let Json::Object(map) = inner {
             for val in map.values() {
@@ -320,10 +319,10 @@ impl Session {
 }
 
 fn ensure_ok(body: &str) -> Result<(), WdError> {
-    let v: Json = serde_json::from_str(body).map_err(|e| WdError(format!("bad response: {} — {}", e, body)))?;
+    let v: Json = serde_json::from_str(body).map_err(|e| WdError(format!("bad response: {e} — {body}")))?;
     if let Some(err) = v.pointer("/value/error").and_then(|x| x.as_str()) {
         let msg = v.pointer("/value/message").and_then(|x| x.as_str()).unwrap_or("");
-        return Err(WdError(format!("WebDriver error: {} — {}", err, msg)));
+        return Err(WdError(format!("WebDriver error: {err} — {msg}")));
     }
     Ok(())
 }
@@ -337,7 +336,7 @@ struct HttpResp {
 }
 
 fn http_request(port: u16, method: &str, path: &str, body: Option<&str>) -> Result<HttpResp, WdError> {
-    let addr_str = format!("127.0.0.1:{}", port);
+    let addr_str = format!("127.0.0.1:{port}");
     let addr = addr_str.to_socket_addrs()?.next().ok_or_else(|| WdError("bad addr".into()))?;
 
     // macOS quirk: `TcpStream::connect_timeout` can return WouldBlock (errno 35)
@@ -353,11 +352,11 @@ fn http_request(port: u16, method: &str, path: &str, body: Option<&str>) -> Resu
                 last_err = Some(e);
                 thread::sleep(Duration::from_millis(100));
             }
-            Err(e) => return Err(WdError(format!("connect {}: {}", addr_str, e))),
+            Err(e) => return Err(WdError(format!("connect {addr_str}: {e}"))),
         }
     }
     let mut stream = stream.ok_or_else(|| WdError(format!(
-        "connect {}: {}", addr_str, last_err.map(|e| e.to_string()).unwrap_or_else(|| "no connection".into())
+        "connect {}: {}", addr_str, last_err.map_or_else(|| "no connection".into(), |e| e.to_string())
     )))?;
 
     stream.set_read_timeout(Some(Duration::from_secs(60)))?;
@@ -366,8 +365,7 @@ fn http_request(port: u16, method: &str, path: &str, body: Option<&str>) -> Resu
     let body_bytes = body.unwrap_or("");
     let mut req = format!(
         // geckodriver ≥0.34 rejects a Host header without the port.
-        "{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUser-Agent: rach/0.2\r\nAccept: application/json\r\nConnection: close\r\n",
-        method, path, port
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUser-Agent: rach/0.2\r\nAccept: application/json\r\nConnection: close\r\n"
     );
     if body.is_some() {
         req.push_str("Content-Type: application/json\r\n");

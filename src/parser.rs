@@ -17,7 +17,7 @@ pub struct ParseError {
 
 impl ParseError {
     fn at(t: Option<&Token>, msg: impl Into<String>) -> Self {
-        let (line, col) = t.map(|t| (t.line, t.col)).unwrap_or((0, 0));
+        let (line, col) = t.map_or((0, 0), |t| (t.line, t.col));
         ParseError { line, col, message: msg.into() }
     }
 }
@@ -56,13 +56,13 @@ impl P {
         t
     }
     fn skip_newlines(&mut self) {
-        while matches!(self.peek().map(|t| &t.tok), Some(Tok::Newline) | Some(Tok::Semicolon)) {
+        while matches!(self.peek().map(|t| &t.tok), Some(Tok::Newline | Tok::Semicolon)) {
             self.pos += 1;
         }
     }
     fn expect_newline(&mut self) -> Result<(), ParseError> {
         match self.peek().map(|t| &t.tok) {
-            Some(Tok::Newline) | Some(Tok::Semicolon) => { self.pos += 1; Ok(()) }
+            Some(Tok::Newline | Tok::Semicolon) => { self.pos += 1; Ok(()) }
             None => Ok(()),
             _ => Err(ParseError::at(self.peek(), "expected end of line")),
         }
@@ -71,9 +71,9 @@ impl P {
         match self.peek().cloned() {
             Some(t) => match &t.tok {
                 Tok::Word(s) if s == w => { self.pos += 1; Ok(t) }
-                _ => Err(ParseError::at(Some(&t), format!("expected `{}`", w))),
+                _ => Err(ParseError::at(Some(&t), format!("expected `{w}`"))),
             },
-            None => Err(ParseError::at(None, format!("expected `{}`", w))),
+            None => Err(ParseError::at(None, format!("expected `{w}`"))),
         }
     }
     fn expect_tok(&mut self, expected: &Tok, label: &str) -> Result<Token, ParseError> {
@@ -81,7 +81,7 @@ impl P {
             Some(t) if std::mem::discriminant(&t.tok) == std::mem::discriminant(expected) => {
                 self.pos += 1; Ok(t)
             }
-            other => Err(ParseError::at(other.as_ref(), format!("expected {}", label))),
+            other => Err(ParseError::at(other.as_ref(), format!("expected {label}"))),
         }
     }
 }
@@ -121,7 +121,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, ParseError> {
     // into an implicit `main`. Defs at the top level still produce real
     // functions/structs regardless of where they sit.
     let mut main_body: Vec<Stmt> = Vec::new();
-    let main_line = p.peek().map(|t| t.line).unwrap_or(1);
+    let main_line = p.peek().map_or(1, |t| t.line);
     let mut explicit_main: Option<Function> = None;
 
     loop {
@@ -555,7 +555,7 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
 
     if word == "return" {
         p.next();
-        if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Newline) | Some(Tok::Semicolon) | None) {
+        if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Newline | Tok::Semicolon) | None) {
             p.expect_newline()?;
             return Ok(Stmt::Return { expr: None, line: head_line });
         }
@@ -857,7 +857,7 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
         });
     }
 
-    if matches!(&next1, Some(Tok::PlusPlus) | Some(Tok::MinusMinus)) {
+    if matches!(&next1, Some(Tok::PlusPlus | Tok::MinusMinus)) {
         let op = match next1.unwrap() {
             Tok::PlusPlus => BinOp::Add,
             Tok::MinusMinus => BinOp::Sub,
@@ -875,7 +875,7 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
     }
 
     // `WORD.field = ...` / `WORD.field += ...` / `WORD[i] = ...`
-    if matches!(&next1, Some(Tok::Dot) | Some(Tok::LBracket)) {
+    if matches!(&next1, Some(Tok::Dot | Tok::LBracket)) {
         let saved = p.pos;
         // Try to parse a place-expr (Var + chain of .field / [idx]) and check for `=` or compound after it.
         if let Some(stmt) = try_parse_place_assign(p, &word, head_line)? {
@@ -900,7 +900,7 @@ fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
                     let v = match v_tok.tok {
                         Tok::Str(parts) => match parts.first() {
                             Some(StrPart::Lit(s)) if parts.len() == 1 => s.clone(),
-                            _ => parts.iter().filter_map(|p| if let StrPart::Lit(s) = p { Some(s.clone()) } else { None }).collect::<Vec<_>>().join(""),
+                            _ => parts.iter().filter_map(|p| if let StrPart::Lit(s) = p { Some(s.clone()) } else { None }).collect::<String>(),
                         },
                         Tok::Int(n) => n.to_string(),
                         Tok::Word(w) => w,
@@ -995,11 +995,11 @@ fn parse_bash_dsl_rhs(p: &mut P) -> Result<(BashAction, String), ParseError> {
     let mut tokens: Vec<String> = Vec::new();
     loop {
         match p.peek().map(|t| t.tok.clone()) {
-            Some(Tok::Newline) | Some(Tok::Semicolon) | None => break,
+            Some(Tok::Newline | Tok::Semicolon) | None => break,
             Some(Tok::Word(w)) => { p.next(); tokens.push(w); }
             Some(Tok::Str(parts)) => {
                 p.next();
-                let s: String = parts.iter().filter_map(|pa| if let StrPart::Lit(s) = pa { Some(s.clone()) } else { None }).collect::<Vec<_>>().join("");
+                let s: String = parts.iter().filter_map(|pa| if let StrPart::Lit(s) = pa { Some(s.clone()) } else { None }).collect::<String>();
                 tokens.push(s);
             }
             Some(Tok::Int(n)) => { p.next(); tokens.push(n.to_string()); }
@@ -1032,7 +1032,7 @@ fn parse_call_or_fncall_stmt(p: &mut P, line: usize) -> Result<Stmt, ParseError>
     // side effect). `try_parse_place_assign` already ruled out `=`/`+=` above and reset
     // `p` back to `word`, so this only fires when the chain ends in a call.
     if let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
-        if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Dot) | Some(Tok::LBracket)) {
+        if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Dot | Tok::LBracket)) {
             let saved = p.pos;
             p.next();
             match parse_postfix_chain(p, Expr::Var(w)) {
@@ -1154,7 +1154,7 @@ fn parse_ternary(p: &mut P) -> Result<Expr, ParseError> {
     let out = (|| -> Result<Expr, ParseError> {
         let cond = parse_logical_or(p)?;
         if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Question)) {
-            let line = p.peek().map(|t| t.line).unwrap_or(0);
+            let line = p.peek().map_or(0, |t| t.line);
             p.next();
             let then_expr = parse_ternary(p)?;
             p.expect_tok(&Tok::Colon, "`:` in ternary")?;
@@ -1175,7 +1175,7 @@ fn parse_ternary(p: &mut P) -> Result<Expr, ParseError> {
 fn parse_logical_or(p: &mut P) -> Result<Expr, ParseError> {
     let mut left = parse_logical_and(p)?;
     while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(ref w)) if w == "or") {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         let right = parse_logical_and(p)?;
         left = Expr::Binary { op: BinOp::Or, lhs: Box::new(left), rhs: Box::new(right), line };
@@ -1186,7 +1186,7 @@ fn parse_logical_or(p: &mut P) -> Result<Expr, ParseError> {
 fn parse_logical_and(p: &mut P) -> Result<Expr, ParseError> {
     let mut left = parse_logical_not(p)?;
     while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(ref w)) if w == "and") {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         let right = parse_logical_not(p)?;
         left = Expr::Binary { op: BinOp::And, lhs: Box::new(left), rhs: Box::new(right), line };
@@ -1196,7 +1196,7 @@ fn parse_logical_and(p: &mut P) -> Result<Expr, ParseError> {
 
 fn parse_logical_not(p: &mut P) -> Result<Expr, ParseError> {
     if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Word(ref w)) if w == "not") {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         p.enter()?;
         let inner = parse_logical_not(p);
@@ -1218,7 +1218,7 @@ fn parse_comparison(p: &mut P) -> Result<Expr, ParseError> {
         _ => None,
     };
     if let Some(op) = op {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         let right = parse_bit_or(p)?;
         return Ok(Expr::Binary { op, lhs: Box::new(left), rhs: Box::new(right), line });
@@ -1229,7 +1229,7 @@ fn parse_comparison(p: &mut P) -> Result<Expr, ParseError> {
 fn parse_bit_or(p: &mut P) -> Result<Expr, ParseError> {
     let mut left = parse_bit_xor(p)?;
     while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Pipe)) {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         let right = parse_bit_xor(p)?;
         left = Expr::Binary { op: BinOp::BitOr, lhs: Box::new(left), rhs: Box::new(right), line };
@@ -1240,7 +1240,7 @@ fn parse_bit_or(p: &mut P) -> Result<Expr, ParseError> {
 fn parse_bit_xor(p: &mut P) -> Result<Expr, ParseError> {
     let mut left = parse_bit_and(p)?;
     while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::CaretCaret)) {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         let right = parse_bit_and(p)?;
         left = Expr::Binary { op: BinOp::BitXor, lhs: Box::new(left), rhs: Box::new(right), line };
@@ -1251,7 +1251,7 @@ fn parse_bit_xor(p: &mut P) -> Result<Expr, ParseError> {
 fn parse_bit_and(p: &mut P) -> Result<Expr, ParseError> {
     let mut left = parse_shift(p)?;
     while matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Amp)) {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         let right = parse_shift(p)?;
         left = Expr::Binary { op: BinOp::BitAnd, lhs: Box::new(left), rhs: Box::new(right), line };
@@ -1267,7 +1267,7 @@ fn parse_shift(p: &mut P) -> Result<Expr, ParseError> {
             Some(Tok::GtGt) => BinOp::Shr,
             _ => break,
         };
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         let right = parse_additive(p)?;
         left = Expr::Binary { op, lhs: Box::new(left), rhs: Box::new(right), line };
@@ -1283,7 +1283,7 @@ fn parse_additive(p: &mut P) -> Result<Expr, ParseError> {
             Some(Tok::Minus) => BinOp::Sub,
             _ => break,
         };
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         let right = parse_multiplicative(p)?;
         left = Expr::Binary { op, lhs: Box::new(left), rhs: Box::new(right), line };
@@ -1300,7 +1300,7 @@ fn parse_multiplicative(p: &mut P) -> Result<Expr, ParseError> {
             Some(Tok::Percent) => BinOp::Mod,
             _ => break,
         };
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         let right = parse_power(p)?;
         left = Expr::Binary { op, lhs: Box::new(left), rhs: Box::new(right), line };
@@ -1311,7 +1311,7 @@ fn parse_multiplicative(p: &mut P) -> Result<Expr, ParseError> {
 fn parse_power(p: &mut P) -> Result<Expr, ParseError> {
     let left = parse_unary(p)?;
     if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::Caret)) {
-        let line = p.peek().map(|t| t.line).unwrap_or(0);
+        let line = p.peek().map_or(0, |t| t.line);
         p.next();
         p.enter()?;
         let right = parse_power(p);
@@ -1324,7 +1324,7 @@ fn parse_power(p: &mut P) -> Result<Expr, ParseError> {
 fn parse_unary(p: &mut P) -> Result<Expr, ParseError> {
     match p.peek().map(|t| t.tok.clone()) {
         Some(Tok::Minus) => {
-            let line = p.peek().map(|t| t.line).unwrap_or(0);
+            let line = p.peek().map_or(0, |t| t.line);
             p.next();
             p.enter()?;
             let inner = parse_unary(p);
@@ -1333,7 +1333,7 @@ fn parse_unary(p: &mut P) -> Result<Expr, ParseError> {
         }
         Some(Tok::Plus) => { p.next(); p.enter()?; let r = parse_unary(p); p.leave(); r }
         Some(Tok::Tilde) => {
-            let line = p.peek().map(|t| t.line).unwrap_or(0);
+            let line = p.peek().map_or(0, |t| t.line);
             p.next();
             p.enter()?;
             let inner = parse_unary(p);
@@ -1354,14 +1354,14 @@ fn parse_postfix_chain(p: &mut P, mut target: Expr) -> Result<Expr, ParseError> 
     loop {
         match p.peek().map(|t| t.tok.clone()) {
             Some(Tok::LBracket) => {
-                let line = p.peek().map(|t| t.line).unwrap_or(0);
+                let line = p.peek().map_or(0, |t| t.line);
                 p.next();
                 let key = parse_expr(p)?;
                 p.expect_tok(&Tok::RBracket, "`]`")?;
                 target = Expr::Index { target: Box::new(target), key: Box::new(key), line };
             }
             Some(Tok::Dot) => {
-                let line = p.peek().map(|t| t.line).unwrap_or(0);
+                let line = p.peek().map_or(0, |t| t.line);
                 p.next();
                 let nt = p.next().ok_or_else(|| ParseError::at(None, "expected field name after `.`"))?;
                 let name = match nt.tok {
@@ -1371,7 +1371,7 @@ fn parse_postfix_chain(p: &mut P, mut target: Expr) -> Result<Expr, ParseError> 
                 target = Expr::Field { target: Box::new(target), name, line };
             }
             Some(Tok::LParen) => {
-                let line = p.peek().map(|t| t.line).unwrap_or(0);
+                let line = p.peek().map_or(0, |t| t.line);
                 p.next();
                 let mut args: Vec<Expr> = Vec::new();
                 loop {
@@ -1393,7 +1393,7 @@ fn parse_postfix_chain(p: &mut P, mut target: Expr) -> Result<Expr, ParseError> 
 }
 
 fn parse_lambda(p: &mut P) -> Result<Expr, ParseError> {
-    let header_line = p.peek().map(|t| t.line).unwrap_or(0);
+    let header_line = p.peek().map_or(0, |t| t.line);
     p.expect_word("fn")?;
     p.expect_tok(&Tok::LParen, "`(`")?;
     let mut params: Vec<String> = Vec::new();
@@ -1489,7 +1489,7 @@ fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
                     Tok::Word(s) => s,
                     _ => return Err(ParseError::at(Some(&nt), "expected name after `::`")),
                 };
-                let combined = format!("{}_{}", w, nm);
+                let combined = format!("{w}_{nm}");
                 if matches!(p.peek().map(|t| t.tok.clone()), Some(Tok::LParen)) {
                     let line = head.line;
                     let _ = p.next();
@@ -1577,7 +1577,7 @@ fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
 fn build_string_expr(parts: Vec<StrPart>, line: usize) -> Result<Expr, ParseError> {
     let has_interp = parts.iter().any(|p| matches!(p, StrPart::Expr(_)));
     if !has_interp {
-        let s: String = parts.into_iter().filter_map(|p| if let StrPart::Lit(s) = p { Some(s) } else { None }).collect::<Vec<_>>().join("");
+        let s: String = parts.into_iter().filter_map(|p| if let StrPart::Lit(s) = p { Some(s) } else { None }).collect::<String>();
         return Ok(Expr::Lit(Value::Str(s)));
     }
     let mut out: Vec<InterpPart> = Vec::new();

@@ -297,10 +297,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
             }
             let lit: String = chars[start..i].iter().collect();
             if is_float {
-                let f: f64 = lit.parse().map_err(|_| LexError { line, col: start_col, message: format!("bad float {}", lit) })?;
+                let f: f64 = lit.parse().map_err(|_| LexError { line, col: start_col, message: format!("bad float {lit}") })?;
                 tokens.push(Token { tok: Tok::Float(f), line, col: start_col });
             } else {
-                let n: i64 = lit.parse().map_err(|_| LexError { line, col: start_col, message: format!("bad number {}", lit) })?;
+                let n: i64 = lit.parse().map_err(|_| LexError { line, col: start_col, message: format!("bad number {lit}") })?;
                 tokens.push(Token { tok: Tok::Int(n), line, col: start_col });
             }
             continue;
@@ -318,7 +318,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
             continue;
         }
 
-        return Err(LexError { line, col: tok_col, message: format!("unexpected character '{}'", c) });
+        return Err(LexError { line, col: tok_col, message: format!("unexpected character '{c}'") });
     }
 
     tokens.push(Token { tok: Tok::Newline, line, col });

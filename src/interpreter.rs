@@ -52,11 +52,13 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    #[must_use]
     pub fn os_matches(&self, want: &str) -> bool {
         let w = want.to_ascii_lowercase();
         self.current_os == w || (w == "macos" && self.current_os == "darwin")
     }
 
+    #[must_use]
     pub fn lookup(&self, name: &str) -> Option<Value> {
         for scope in self.scopes.iter().rev() {
             if let Some(v) = scope.vars.get(name) { return Some(v.clone()); }
@@ -67,7 +69,7 @@ impl Ctx {
     pub fn set_var(&mut self, name: String, value: Value) -> Result<(), RuntimeError> {
         for scope in self.scopes.iter().rev() {
             if scope.consts.contains(&name) {
-                return Err(RuntimeError::new(400, 0, format!("cannot reassign const `{}`", name)));
+                return Err(RuntimeError::new(400, 0, format!("cannot reassign const `{name}`")));
             }
         }
         for scope in self.scopes.iter_mut().rev() {
@@ -85,7 +87,7 @@ impl Ctx {
     pub fn declare_const(&mut self, name: String, value: Value) -> Result<(), RuntimeError> {
         for scope in self.scopes.iter().rev() {
             if scope.consts.contains(&name) {
-                return Err(RuntimeError::new(400, 0, format!("const `{}` already defined", name)));
+                return Err(RuntimeError::new(400, 0, format!("const `{name}` already defined")));
             }
         }
         if let Some(scope) = self.scopes.last_mut() {
@@ -113,6 +115,7 @@ pub fn report_pretty(stage: &str, code: i64, path: &str, line: usize, col: usize
 /// Same parameter list as `report_pretty` plus `color`; a struct would just move the
 /// same eight pieces of data one level of indirection away.
 #[allow(clippy::too_many_arguments)]
+#[must_use]
 pub fn render_pretty(stage: &str, code: i64, path: &str, line: usize, col: usize, message: &str, source: Option<&str>, color: bool) -> String {
     use std::fmt::Write;
     let (red, bold, dim, reset) = if color {
@@ -122,12 +125,12 @@ pub fn render_pretty(stage: &str, code: i64, path: &str, line: usize, col: usize
     };
 
     let mut out = String::new();
-    let _ = writeln!(out, "{}error[{}]{}: {}{}{}", red, code, reset, bold, message, reset);
+    let _ = writeln!(out, "{red}error[{code}]{reset}: {bold}{message}{reset}");
     if line > 0 {
         if col > 0 {
-            let _ = writeln!(out, "{}  --> {}{}:{}:{}", dim, reset, path, line, col);
+            let _ = writeln!(out, "{dim}  --> {reset}{path}:{line}:{col}");
         } else {
-            let _ = writeln!(out, "{}  --> {}{}:{}", dim, reset, path, line);
+            let _ = writeln!(out, "{dim}  --> {reset}{path}:{line}");
         }
         if let Some(src) = source {
             let lines: Vec<&str> = src.lines().collect();
@@ -140,7 +143,7 @@ pub fn render_pretty(stage: &str, code: i64, path: &str, line: usize, col: usize
                 let mark = if n == line { ">" } else { " " };
                 let txt = lines[n - 1];
                 if n == line {
-                    let _ = writeln!(out, "{}{:>w$} |{} {} {}{}{}", dim, n, reset, mark, red, txt, reset, w = width);
+                    let _ = writeln!(out, "{dim}{n:>width$} |{reset} {mark} {red}{txt}{reset}");
                     if col > 0 {
                         // Keep tabs so the caret lines up with the source as displayed.
                         let pad: String = txt.chars().take(col - 1)
@@ -148,15 +151,15 @@ pub fn render_pretty(stage: &str, code: i64, path: &str, line: usize, col: usize
                         let _ = writeln!(out, "{}{:>w$} |{}   {}{}^{}", dim, "", reset, pad, red, reset, w = width);
                     }
                 } else {
-                    let _ = writeln!(out, "{}{:>w$} |{} {} {}", dim, n, reset, mark, txt, w = width);
+                    let _ = writeln!(out, "{dim}{n:>width$} |{reset} {mark} {txt}");
                 }
             }
             let _ = writeln!(out, "{}{:>w$} |{}", dim, "", reset, w = width);
         }
     } else {
-        let _ = writeln!(out, "{}  --> {}{}", dim, reset, path);
+        let _ = writeln!(out, "{dim}  --> {reset}{path}");
     }
-    let _ = writeln!(out, "{}// {} error {} string {}{}", dim, stage, code, line, reset);
+    let _ = writeln!(out, "{dim}// {stage} error {code} string {line}{reset}");
     out
 }
 
@@ -177,10 +180,10 @@ fn return_signal(value: Value) -> RuntimeError {
 fn serialize_value(v: &Value) -> String {
     match v {
         Value::Nil => "N::nil".into(),
-        Value::Bool(b) => format!("N::bool::{}", b),
-        Value::Int(n) => format!("N::int::{}", n),
-        Value::Float(f) => format!("N::float::{}", f),
-        Value::Str(s) => format!("N::str::{}", s),
+        Value::Bool(b) => format!("N::bool::{b}"),
+        Value::Int(n) => format!("N::int::{n}"),
+        Value::Float(f) => format!("N::float::{f}"),
+        Value::Str(s) => format!("N::str::{s}"),
         Value::List(items) => {
             let parts: Vec<String> = items.iter().map(serialize_value).collect();
             format!("N::list::{}", parts.join("\u{1F}"))
@@ -196,7 +199,7 @@ fn serialize_value(v: &Value) -> String {
         // in a thread-local LRU and put a token here.
         Value::Struct { .. } | Value::Lambda { .. } => {
             let tok = stash_value(v.clone());
-            format!("N::ref::{}", tok)
+            format!("N::ref::{tok}")
         }
     }
 }
@@ -266,13 +269,14 @@ fn unstash_value(tok: u64) -> Option<Value> {
     REF_STORE.with(|s| s.borrow_mut().remove(&tok))
 }
 
+#[must_use]
 pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
     Ctx {
         imports: HashSet::new(),
         current_os: stdlib::os::detect_os_name(),
         wd: None,
         wd_unavailable: None,
-        headless: std::env::var("RACH_HEADLESS").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false),
+        headless: std::env::var("RACH_HEADLESS").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
         scopes: vec![Scope::default()],
         functions: HashMap::new(),
         structs: HashMap::new(),
@@ -333,13 +337,13 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
 
     for imp in &program.imports {
         if !known_modules.contains(imp.as_str()) {
-            eprintln!("warn: unknown module `{}` (continuing)", imp);
+            eprintln!("warn: unknown module `{imp}` (continuing)");
         }
     }
 
     let imports: HashSet<String> = program.imports.iter().cloned().collect();
-    let headless = std::env::var("RACH_HEADLESS").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
-    let strict = std::env::var("RACH_STRICT").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let headless = std::env::var("RACH_HEADLESS").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+    let strict = std::env::var("RACH_STRICT").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
     let mut functions: HashMap<String, Function> = HashMap::new();
     for f in &program.functions {
@@ -397,7 +401,7 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             Ok(())
         }
         Stmt::Error { code, line_ref, line } => {
-            eprintln!("error {} string {}", code, line_ref);
+            eprintln!("error {code} string {line_ref}");
             if ctx.strict {
                 return Err(RuntimeError::new(*code, *line, "strict mode: error aborts execution"));
             }
@@ -430,7 +434,7 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
                 Value::Str(s) => Box::new(s.split(',').map(|x| Value::Str(x.trim().to_string())).collect::<Vec<_>>().into_iter()),
                 Value::Int(n) if n >= 0 => Box::new((0..n).map(Value::Int)),
                 other => {
-                    return Err(RuntimeError::new(400, *line, format!("for: cannot iterate over {:?}", other)));
+                    return Err(RuntimeError::new(400, *line, format!("for: cannot iterate over {other:?}")));
                 }
             };
             for item in items {
@@ -442,7 +446,7 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
                     let parts = match &item {
                         Value::List(xs) => xs.clone(),
                         other => return Err(RuntimeError::new(400, *line,
-                            format!("for: tuple unpack expects a list, got {:?}", other))),
+                            format!("for: tuple unpack expects a list, got {other:?}"))),
                     };
                     for (i, vname) in vars.iter().enumerate() {
                         let val = parts.get(i).cloned().unwrap_or(Value::Nil);
@@ -465,9 +469,7 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
             let base = if base_path.is_empty() {
                 std::path::Path::new(".").to_path_buf()
             } else {
-                std::path::Path::new(&base_path).parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| std::path::Path::new(".").to_path_buf())
+                std::path::Path::new(&base_path).parent().map_or_else(|| std::path::Path::new(".").to_path_buf(), std::path::Path::to_path_buf)
             };
             let full = base.join(path);
             let source = std::fs::read_to_string(&full).map_err(|e| {
@@ -552,7 +554,7 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
                     Some(e) => eval_expr(e, ctx)?.as_str(),
                     None => "assertion failed".to_string(),
                 };
-                return Err(RuntimeError::new(400, *line, format!("assert: {}", msg)));
+                return Err(RuntimeError::new(400, *line, format!("assert: {msg}")));
             }
             Ok(())
         }
@@ -760,7 +762,7 @@ fn match_pattern(pat: &MatchPattern, val: &Value, bindings: &mut HashMap<String,
 fn read_target(target: &AssignTarget, ctx: &mut Ctx, line: usize) -> Result<Value, RuntimeError> {
     match target {
         AssignTarget::Name(name) => ctx.lookup(name)
-            .ok_or_else(|| RuntimeError::new(404, line, format!("undefined variable `{}`", name))),
+            .ok_or_else(|| RuntimeError::new(404, line, format!("undefined variable `{name}`"))),
         AssignTarget::Index { target, key } => {
             let t = eval_expr(target, ctx)?;
             let k = eval_expr(key, ctx)?;
@@ -792,7 +794,7 @@ fn assign_to_target(target: &AssignTarget, value: Value, is_const: bool, line: u
                         let n = items.len() as i64;
                         let idx = if i < 0 { i + n } else { i };
                         if idx < 0 || idx as usize >= items.len() {
-                            return Err(RuntimeError::new(404, line, format!("list index out of range: {}", i)));
+                            return Err(RuntimeError::new(404, line, format!("list index out of range: {i}")));
                         }
                         items[idx as usize] = value;
                         Ok(())
@@ -805,7 +807,7 @@ fn assign_to_target(target: &AssignTarget, value: Value, is_const: bool, line: u
                         fields.insert(key_val.as_str(), value);
                         Ok(())
                     }
-                    other => Err(RuntimeError::new(400, line, format!("cannot index-assign into {:?}", other))),
+                    other => Err(RuntimeError::new(400, line, format!("cannot index-assign into {other:?}"))),
                 }
             }))
         }
@@ -815,7 +817,7 @@ fn assign_to_target(target: &AssignTarget, value: Value, is_const: bool, line: u
                 match container {
                     Value::Struct { fields, .. } => { fields.insert(field_name, value); Ok(()) }
                     Value::Map(m) => { m.insert(field_name, value); Ok(()) }
-                    other => Err(RuntimeError::new(400, line, format!("cannot field-assign on {:?}", other))),
+                    other => Err(RuntimeError::new(400, line, format!("cannot field-assign on {other:?}"))),
                 }
             }))
         }
@@ -827,7 +829,7 @@ type Mutator = Box<dyn FnOnce(&mut Value) -> Result<(), RuntimeError>>;
 fn mutate_place(expr: &Expr, ctx: &mut Ctx, line: usize, mutator: Mutator) -> Result<(), RuntimeError> {
     match expr {
         Expr::Var(name) => {
-            let mut v = ctx.lookup(name).ok_or_else(|| RuntimeError::new(404, line, format!("undefined variable `{}`", name)))?;
+            let mut v = ctx.lookup(name).ok_or_else(|| RuntimeError::new(404, line, format!("undefined variable `{name}`")))?;
             mutator(&mut v)?;
             ctx.set_var(name.clone(), v)?;
             Ok(())
@@ -854,9 +856,9 @@ fn mutate_place(expr: &Expr, ctx: &mut Ctx, line: usize, mutator: Mutator) -> Re
 
 fn field_mut<'a>(v: &'a mut Value, name: &str, line: usize) -> Result<&'a mut Value, RuntimeError> {
     match v {
-        Value::Struct { fields, .. } => fields.get_mut(name).ok_or_else(|| RuntimeError::new(404, line, format!("no field `{}`", name))),
+        Value::Struct { fields, .. } => fields.get_mut(name).ok_or_else(|| RuntimeError::new(404, line, format!("no field `{name}`"))),
         Value::Map(m) => Ok(m.entry(name.to_string()).or_insert(Value::Nil)),
-        other => Err(RuntimeError::new(400, line, format!("cannot access field `{}` on {:?}", name, other))),
+        other => Err(RuntimeError::new(400, line, format!("cannot access field `{name}` on {other:?}"))),
     }
 }
 
@@ -866,19 +868,19 @@ fn index_mut<'a>(v: &'a mut Value, key: &Value, line: usize) -> Result<&'a mut V
             let i = key.as_f64().ok_or_else(|| RuntimeError::new(400, line, "list index must be int"))? as i64;
             let n = items.len() as i64;
             let idx = if i < 0 { i + n } else { i };
-            items.get_mut(idx as usize).ok_or_else(|| RuntimeError::new(404, line, format!("list index out of range: {}", i)))
+            items.get_mut(idx as usize).ok_or_else(|| RuntimeError::new(404, line, format!("list index out of range: {i}")))
         }
         Value::Map(m) => Ok(m.entry(key.as_str()).or_insert(Value::Nil)),
         Value::Struct { fields, .. } => Ok(fields.entry(key.as_str()).or_insert(Value::Nil)),
-        other => Err(RuntimeError::new(400, line, format!("cannot index into {:?}", other))),
+        other => Err(RuntimeError::new(400, line, format!("cannot index into {other:?}"))),
     }
 }
 
 fn field_of(v: &Value, name: &str, line: usize) -> Result<Value, RuntimeError> {
     match v {
-        Value::Struct { fields, .. } => fields.get(name).cloned().ok_or_else(|| RuntimeError::new(404, line, format!("no field `{}`", name))),
+        Value::Struct { fields, .. } => fields.get(name).cloned().ok_or_else(|| RuntimeError::new(404, line, format!("no field `{name}`"))),
         Value::Map(m) => Ok(m.get(name).cloned().unwrap_or(Value::Nil)),
-        other => Err(RuntimeError::new(400, line, format!("cannot read field `{}` on {:?}", name, other))),
+        other => Err(RuntimeError::new(400, line, format!("cannot read field `{name}` on {other:?}"))),
     }
 }
 
@@ -888,7 +890,7 @@ fn index_into(t: &Value, k: &Value, line: usize) -> Result<Value, RuntimeError> 
             let n = items.len() as i64;
             let idx = if *i < 0 { *i + n } else { *i };
             items.get(idx as usize).cloned()
-                .ok_or_else(|| RuntimeError::new(404, line, format!("list index out of range: {}", i)))
+                .ok_or_else(|| RuntimeError::new(404, line, format!("list index out of range: {i}")))
         }
         (Value::Map(m), _) => {
             let key_str = k.as_str();
@@ -902,9 +904,9 @@ fn index_into(t: &Value, k: &Value, line: usize) -> Result<Value, RuntimeError> 
             let n = chars.len() as i64;
             let idx = if *i < 0 { *i + n } else { *i };
             chars.get(idx as usize).map(|c| Value::Str(c.to_string()))
-                .ok_or_else(|| RuntimeError::new(404, line, format!("string index out of range: {}", i)))
+                .ok_or_else(|| RuntimeError::new(404, line, format!("string index out of range: {i}")))
         }
-        _ => Err(RuntimeError::new(400, line, format!("cannot index {:?} by {:?}", t, k))),
+        _ => Err(RuntimeError::new(400, line, format!("cannot index {t:?} by {k:?}"))),
     }
 }
 
@@ -917,7 +919,7 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
             "trim"        => Some(Value::Str(s.trim().to_string())),
             "len"         => Some(Value::Int(s.chars().count() as i64)),
             "split" => {
-                let sep = args.first().map(|v| v.as_str()).unwrap_or_else(|| " ".into());
+                let sep = args.first().map_or_else(|| " ".into(), Value::as_str);
                 let parts: Vec<Value> = if sep.is_empty() {
                     s.chars().map(|c| Value::Str(c.to_string())).collect()
                 } else {
@@ -926,15 +928,15 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
                 Some(Value::List(parts))
             }
             "replace" => {
-                let from = args.first().map(|v| v.as_str()).unwrap_or_default();
-                let to   = args.get(1).map(|v| v.as_str()).unwrap_or_default();
+                let from = args.first().map(Value::as_str).unwrap_or_default();
+                let to   = args.get(1).map(Value::as_str).unwrap_or_default();
                 Some(Value::Str(s.replace(from.as_str(), to.as_str())))
             }
-            "contains"    => Some(Value::Bool(s.contains(args.first().map(|v| v.as_str()).unwrap_or_default().as_str()))),
-            "starts_with" => Some(Value::Bool(s.starts_with(args.first().map(|v| v.as_str()).unwrap_or_default().as_str()))),
-            "ends_with"   => Some(Value::Bool(s.ends_with(args.first().map(|v| v.as_str()).unwrap_or_default().as_str()))),
+            "contains"    => Some(Value::Bool(s.contains(args.first().map(Value::as_str).unwrap_or_default().as_str()))),
+            "starts_with" => Some(Value::Bool(s.starts_with(args.first().map(Value::as_str).unwrap_or_default().as_str()))),
+            "ends_with"   => Some(Value::Bool(s.ends_with(args.first().map(Value::as_str).unwrap_or_default().as_str()))),
             "find" => {
-                let needle = args.first().map(|v| v.as_str()).unwrap_or_default();
+                let needle = args.first().map(Value::as_str).unwrap_or_default();
                 Some(match s.find(needle.as_str()) {
                     Some(i) => Value::Int(s[..i].chars().count() as i64),
                     None    => Value::Int(-1),
@@ -943,7 +945,7 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
             "chars"  => Some(Value::List(s.chars().map(|c| Value::Str(c.to_string())).collect())),
             "lines"  => Some(Value::List(s.lines().map(|l| Value::Str(l.to_string())).collect())),
             "repeat" => {
-                let n = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
+                let n = args.first().and_then(Value::as_f64).unwrap_or(0.0) as usize;
                 Some(Value::Str(s.repeat(n)))
             }
             "is_empty" => Some(Value::Bool(s.is_empty())),
@@ -973,19 +975,19 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
             }
             "sort" | "sorted" => {
                 let mut new = items.clone();
-                new.sort_by_key(|a| a.as_str());
+                new.sort_by_key(Value::as_str);
                 Some(Value::List(new))
             }
             "join" => {
-                let sep = args.first().map(|v| v.as_str()).unwrap_or_default();
-                let s = items.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(sep.as_str());
+                let sep = args.first().map(Value::as_str).unwrap_or_default();
+                let s = items.iter().map(Value::as_str).collect::<Vec<_>>().join(sep.as_str());
                 Some(Value::Str(s))
             }
             "first" => Some(items.first().cloned().unwrap_or(Value::Nil)),
             "last"  => Some(items.last().cloned().unwrap_or(Value::Nil)),
             "slice" => {
-                let start = args.first().and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
-                let end   = args.get(1).and_then(|v| v.as_f64()).map(|n| n as usize).unwrap_or(items.len());
+                let start = args.first().and_then(Value::as_f64).unwrap_or(0.0) as usize;
+                let end   = args.get(1).and_then(Value::as_f64).map_or(items.len(), |n| n as usize);
                 Some(Value::List(items[start.min(items.len())..end.min(items.len())].to_vec()))
             }
             "map" => {
@@ -1014,7 +1016,7 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
                     Some(v) => v,
                     None => items.first().cloned().unwrap_or(Value::Nil),
                 };
-                let start = if has_init { 0 } else { 1 };
+                let start = usize::from(!has_init);
                 for item in &items[start..] {
                     acc = call_value(&f, vec![acc, item.clone()], line, ctx)?;
                 }
@@ -1028,22 +1030,22 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
             "keys"     => Some(Value::List(m.keys().map(|k| Value::Str(k.clone())).collect())),
             "values"   => Some(Value::List(m.values().cloned().collect())),
             "has" | "contains" => {
-                let key = args.first().map(|v| v.as_str()).unwrap_or_default();
+                let key = args.first().map(Value::as_str).unwrap_or_default();
                 Some(Value::Bool(m.contains_key(key.as_str())))
             }
             "get" => {
-                let key = args.first().map(|v| v.as_str()).unwrap_or_default();
+                let key = args.first().map(Value::as_str).unwrap_or_default();
                 Some(m.get(key.as_str()).cloned().unwrap_or(Value::Nil))
             }
             "set" => {
-                let key = args.first().map(|v| v.as_str()).unwrap_or_default();
+                let key = args.first().map(Value::as_str).unwrap_or_default();
                 let val = args.get(1).cloned().unwrap_or(Value::Nil);
                 let mut new = m.clone();
-                new.insert(key.to_string(), val);
+                new.insert(key.clone(), val);
                 Some(Value::Map(new))
             }
             "remove" => {
-                let key = args.first().map(|v| v.as_str()).unwrap_or_default();
+                let key = args.first().map(Value::as_str).unwrap_or_default();
                 let mut new = m.clone();
                 new.remove(key.as_str());
                 Some(Value::Map(new))
@@ -1085,7 +1087,7 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
     match expr {
         Expr::Lit(v) => Ok(v.clone()),
         Expr::Var(name) => {
-            ctx.lookup(name).ok_or_else(|| RuntimeError::new(404, 0, format!("undefined variable `{}`", name)))
+            ctx.lookup(name).ok_or_else(|| RuntimeError::new(404, 0, format!("undefined variable `{name}`")))
         }
         Expr::List(items) => {
             let mut out = Vec::with_capacity(items.len());
@@ -1186,14 +1188,14 @@ fn eval_expr(expr: &Expr, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
         }
         Expr::StructLit { name, fields, line } => {
             let def = ctx.structs.get(name).cloned()
-                .ok_or_else(|| RuntimeError::new(404, *line, format!("undefined struct `{}`", name)))?;
+                .ok_or_else(|| RuntimeError::new(404, *line, format!("undefined struct `{name}`")))?;
             let mut fmap: BTreeMap<String, Value> = BTreeMap::new();
             for f in &def.fields {
                 fmap.insert(f.clone(), Value::Nil);
             }
             for (k, ex) in fields {
                 if !def.fields.iter().any(|f| f == k) {
-                    return Err(RuntimeError::new(400, *line, format!("struct `{}` has no field `{}`", name, k)));
+                    return Err(RuntimeError::new(400, *line, format!("struct `{name}` has no field `{k}`")));
                 }
                 let v = eval_expr(ex, ctx)?;
                 fmap.insert(k.clone(), v);
@@ -1258,13 +1260,13 @@ pub fn call_value(callee: &Value, args: Vec<Value>, line: usize, ctx: &mut Ctx) 
                 Err(e) => Err(e),
             }
         }
-        other => Err(RuntimeError::new(400, line, format!("not callable: {:?}", other))),
+        other => Err(RuntimeError::new(400, line, format!("not callable: {other:?}"))),
     }
 }
 
 fn call_user_function(name: &str, arg_values: Vec<Value>, line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
     let func = ctx.functions.get(name).cloned()
-        .ok_or_else(|| RuntimeError::new(404, line, format!("undefined function `{}`", name)))?;
+        .ok_or_else(|| RuntimeError::new(404, line, format!("undefined function `{name}`")))?;
 
     let required = func.defaults.iter().filter(|d| d.is_none()).count();
     if arg_values.len() < required || arg_values.len() > func.params.len() {
@@ -1289,7 +1291,7 @@ fn call_user_function(name: &str, arg_values: Vec<Value>, line: usize, ctx: &mut
     if ctx.call_depth >= MAX_CALL_DEPTH {
         return Err(RuntimeError::new(
             500, line,
-            format!("call stack exceeded {} frames (infinite recursion?) in `{}`", MAX_CALL_DEPTH, name),
+            format!("call stack exceeded {MAX_CALL_DEPTH} frames (infinite recursion?) in `{name}`"),
         ));
     }
 
@@ -1324,11 +1326,11 @@ fn call_struct_method(
     let func = ctx.impls.get(struct_name)
         .and_then(|m| m.get(method_name))
         .cloned()
-        .ok_or_else(|| RuntimeError::new(404, line, format!("struct `{}` has no method `{}`", struct_name, method_name)))?;
+        .ok_or_else(|| RuntimeError::new(404, line, format!("struct `{struct_name}` has no method `{method_name}`")))?;
 
     if func.params.first().map(String::as_str) != Some("self") {
         return Err(RuntimeError::new(500, line, format!(
-            "method `{}.{}` must take `self` as its first parameter", struct_name, method_name
+            "method `{struct_name}.{method_name}` must take `self` as its first parameter"
         )));
     }
     let rest_params = &func.params[1..];
@@ -1355,7 +1357,7 @@ fn call_struct_method(
 
     if ctx.call_depth >= MAX_CALL_DEPTH {
         return Err(RuntimeError::new(500, line, format!(
-            "call stack exceeded {} frames (infinite recursion?) in `{}.{}`", MAX_CALL_DEPTH, struct_name, method_name
+            "call stack exceeded {MAX_CALL_DEPTH} frames (infinite recursion?) in `{struct_name}.{method_name}`"
         )));
     }
 
@@ -1381,6 +1383,7 @@ fn call_struct_method(
     Ok((ret, self_after))
 }
 
+#[must_use]
 pub fn values_equal_pub(l: &Value, r: &Value) -> bool { values_equal(l, r) }
 
 fn values_equal(l: &Value, r: &Value) -> bool {
@@ -1415,7 +1418,7 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, Ru
 
     if matches!(op, BinOp::Add) {
         if let (Value::Str(a), Value::Str(b)) = (l, r) {
-            return Ok(Value::Str(format!("{}{}", a, b)));
+            return Ok(Value::Str(format!("{a}{b}")));
         }
         if let (Value::List(a), Value::List(b)) = (l, r) {
             let mut joined = a.clone();
@@ -1426,8 +1429,8 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, Ru
 
     // Bitwise: int-only.
     if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr) {
-        let li = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bitwise: {:?} is not a number", l)))? as i64;
-        let ri = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bitwise: {:?} is not a number", r)))? as i64;
+        let li = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bitwise: {l:?} is not a number")))? as i64;
+        let ri = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bitwise: {r:?} is not a number")))? as i64;
         let res = match op {
             BinOp::BitAnd => li & ri,
             BinOp::BitOr  => li | ri,
@@ -1439,8 +1442,8 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, Ru
         return Ok(Value::Int(res));
     }
 
-    let lf = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {:?} as number", l)))?;
-    let rf = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {:?} as number", r)))?;
+    let lf = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {l:?} as number")))?;
+    let rf = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {r:?} as number")))?;
     let both_int = matches!((l, r), (Value::Int(_), Value::Int(_)));
 
     if matches!(op, BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge) {
@@ -1487,19 +1490,20 @@ fn eval_unary(op: UnaryOp, v: &Value, line: usize) -> Result<Value, RuntimeError
             Value::Int(n) => Ok(n.checked_neg().map_or_else(|| Value::Float(-(*n as f64)), Value::Int)),
             Value::Float(f) => Ok(Value::Float(-f)),
             other => {
-                let f = other.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot negate {:?}", other)))?;
+                let f = other.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot negate {other:?}")))?;
                 Ok(Value::Float(-f))
             }
         }
         UnaryOp::Not => Ok(Value::Bool(!v.is_truthy())),
         UnaryOp::BitNot => {
-            let i = v.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bit-not: {:?} is not a number", v)))? as i64;
+            let i = v.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bit-not: {v:?} is not a number")))? as i64;
             Ok(Value::Int(!i))
         }
     }
 }
 
 #[allow(dead_code)]
+#[must_use]
 pub fn _bash_action_label(a: &BashAction) -> &'static str {
     match a {
         BashAction::Generate => "generate",

@@ -5,18 +5,18 @@ pub fn run_bash_dsl(action: &BashAction, argument: &str, line: usize) -> Result<
     match action {
         BashAction::Generate => {
             let snippet = generate_bash(argument);
-            println!("# bash (generated for: {})", argument);
-            println!("{}", snippet);
+            println!("# bash (generated for: {argument})");
+            println!("{snippet}");
             println!("completed");
         }
         BashAction::Search => {
             let opts = search_tool(argument);
-            println!("# search results for `{}`", argument);
-            for o in opts { println!("  - {}", o); }
+            println!("# search results for `{argument}`");
+            for o in opts { println!("  - {o}"); }
             println!("completed");
         }
         BashAction::WebSearch => {
-            println!("# web search: {}", argument);
+            println!("# web search: {argument}");
             println!("# (network access not performed; use run_command(\"curl ...\") if needed)");
             println!("completed");
         }
@@ -61,7 +61,7 @@ fn generate_bash(task: &str) -> String {
     }
 
     // Fallback: a comment noting the request
-    format!("# TODO: implement: {}\necho 'task: {}'", task, task)
+    format!("# TODO: implement: {task}\necho 'task: {task}'")
 }
 
 fn search_tool(query: &str) -> Vec<String> {

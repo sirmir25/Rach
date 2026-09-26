@@ -1,5 +1,6 @@
 /// Returns the canonical lowercase OS name used internally for `if linux:`,
 /// `if macos:`, etc. Set once into `Ctx::current_os` at startup.
+#[must_use]
 pub fn detect_os_name() -> String {
     if cfg!(target_os = "linux") { "linux".into() }
     else if cfg!(target_os = "macos") { "macos".into() }
@@ -12,22 +13,22 @@ use crate::ast::Value;
 use crate::interpreter::{Ctx, RuntimeError};
 
 pub fn listdir(args: &[Value], line: usize, _ctx: &Ctx) -> Result<Value, RuntimeError> {
-    let path = args.first().map(|v| v.as_str()).unwrap_or_else(|| ".".into());
+    let path = args.first().map_or_else(|| ".".into(), Value::as_str);
     let entries = std::fs::read_dir(path.as_str())
-        .map_err(|e| RuntimeError::new(500, line, format!("listdir: {}", e)))?;
+        .map_err(|e| RuntimeError::new(500, line, format!("listdir: {e}")))?;
     let mut names = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| RuntimeError::new(500, line, format!("listdir: {}", e)))?;
+        let entry = entry.map_err(|e| RuntimeError::new(500, line, format!("listdir: {e}")))?;
         names.push(Value::Str(entry.file_name().to_string_lossy().to_string()));
     }
-    names.sort_by_key(|a| a.as_str());
+    names.sort_by_key(Value::as_str);
     Ok(Value::List(names))
 }
 
 pub fn mkdir(args: &[Value], line: usize, _ctx: &Ctx) -> Result<Value, RuntimeError> {
-    let path = args.first().map(|v| v.as_str()).unwrap_or_default();
+    let path = args.first().map(Value::as_str).unwrap_or_default();
     std::fs::create_dir_all(path.as_str())
-        .map_err(|e| RuntimeError::new(500, line, format!("mkdir: {}", e)))?;
+        .map_err(|e| RuntimeError::new(500, line, format!("mkdir: {e}")))?;
     Ok(Value::Nil)
 }
 
@@ -59,7 +60,7 @@ pub fn path_basename(args: &[Value], line: usize, _ctx: &Ctx) -> Result<Value, R
 pub fn path_dirname(args: &[Value], line: usize, _ctx: &Ctx) -> Result<Value, RuntimeError> {
     let path = args.first().ok_or_else(|| RuntimeError::new(400, line, "path_dirname: requires a path"))?.as_str();
     let p = std::path::Path::new(path.as_str());
-    Ok(Value::Str(p.parent().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| ".".into())))
+    Ok(Value::Str(p.parent().map_or_else(|| ".".into(), |n| n.to_string_lossy().to_string())))
 }
 
 pub fn path_ext(args: &[Value], line: usize, _ctx: &Ctx) -> Result<Value, RuntimeError> {
@@ -78,7 +79,7 @@ pub fn env_get(args: &[Value], line: usize, _ctx: &Ctx) -> Result<Value, Runtime
 
 pub fn env_set(args: &[Value], line: usize, _ctx: &Ctx) -> Result<Value, RuntimeError> {
     let key = args.first().ok_or_else(|| RuntimeError::new(400, line, "env_set: requires key"))?.as_str();
-    let val = args.get(1).map(|v| v.as_str()).unwrap_or_default();
+    let val = args.get(1).map(Value::as_str).unwrap_or_default();
     std::env::set_var(key.as_str(), val.as_str());
     Ok(Value::Nil)
 }

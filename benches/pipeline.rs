@@ -17,7 +17,7 @@ while i < 50:
     i = i + 1
 "#;
 
-const FIBONACCI: &str = r#"
+const FIBONACCI: &str = r"
 rach fib(n):
     if n < 2:
         return n
@@ -25,9 +25,9 @@ rach fib(n):
 end
 
 result = fib(18)
-"#;
+";
 
-const STRUCT_METHODS: &str = r#"
+const STRUCT_METHODS: &str = r"
 struct Point { x, y }
 
 impl Point:
@@ -42,7 +42,7 @@ i = 0
 while i < 200:
     p.move(1, 1)
     i = i + 1
-"#;
+";
 
 fn run(src: &str) {
     let tokens = lexer::tokenize(src).expect("lex");

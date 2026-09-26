@@ -59,21 +59,22 @@ pub enum Value {
 }
 
 impl Value {
+    #[must_use]
     pub fn as_str(&self) -> String {
         match self {
             Value::Str(s) => s.clone(),
             Value::Int(i) => i.to_string(),
             Value::Float(f) => {
                 if f.is_finite() && *f == f.trunc() && f.abs() < 1e16 {
-                    format!("{:.1}", f)
+                    format!("{f:.1}")
                 } else {
-                    format!("{}", f)
+                    format!("{f}")
                 }
             }
             Value::Bool(b) => b.to_string(),
             Value::Nil => String::new(),
             Value::List(items) => {
-                let parts: Vec<String> = items.iter().map(|v| v.as_str()).collect();
+                let parts: Vec<String> = items.iter().map(Value::as_str).collect();
                 parts.join(", ")
             }
             Value::Map(items) => {
@@ -94,6 +95,7 @@ impl Value {
         }
     }
 
+    #[must_use]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Int(i) => Some(*i as f64),
@@ -104,6 +106,7 @@ impl Value {
         }
     }
 
+    #[must_use]
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Bool(b) => *b,

@@ -10,21 +10,21 @@ const HALF_TURN: f64 = 180.0;
 
 fn one_f64(args: &[Value], line: usize, what: &str) -> Result<f64, RuntimeError> {
     args.first()
-        .and_then(|v| v.as_f64())
-        .ok_or_else(|| RuntimeError::new(400, line, format!("{} requires a numeric argument", what)))
+        .and_then(Value::as_f64)
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what} requires a numeric argument")))
 }
 
 fn two_f64(args: &[Value], line: usize, what: &str) -> Result<(f64, f64), RuntimeError> {
-    let a = args.first().and_then(|v| v.as_f64())
-        .ok_or_else(|| RuntimeError::new(400, line, format!("{} requires arg #1 numeric", what)))?;
-    let b = args.get(1).and_then(|v| v.as_f64())
-        .ok_or_else(|| RuntimeError::new(400, line, format!("{} requires arg #2 numeric", what)))?;
+    let a = args.first().and_then(Value::as_f64)
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what} requires arg #1 numeric")))?;
+    let b = args.get(1).and_then(Value::as_f64)
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what} requires arg #2 numeric")))?;
     Ok((a, b))
 }
 
 fn emit(ctx: &Ctx, label: &str, value: f64) -> Value {
     if !ctx.capturing {
-        println!("{}: {}", label, value);
+        println!("{label}: {value}");
         println!("completed");
     }
     Value::Float(value)
@@ -83,7 +83,7 @@ pub fn abs(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError
         Value::Int(n) => n.checked_abs().map_or_else(|| Value::Float((*n as f64).abs()), Value::Int),
         Value::Float(f) => Value::Float(f.abs()),
         other => Value::Float(other.as_f64()
-            .ok_or_else(|| RuntimeError::new(400, line, format!("abs: not a number: {:?}", other)))?
+            .ok_or_else(|| RuntimeError::new(400, line, format!("abs: not a number: {other:?}")))?
             .abs()),
     };
     if !ctx.capturing {
@@ -114,12 +114,12 @@ pub fn round(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeErr
 
 pub fn min(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let nums = collect_numbers(args, line, "min")?;
-    let m = nums.iter().cloned().fold(f64::INFINITY, f64::min);
+    let m = nums.iter().copied().fold(f64::INFINITY, f64::min);
     Ok(emit(ctx, "min", m))
 }
 pub fn max(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let nums = collect_numbers(args, line, "max")?;
-    let m = nums.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let m = nums.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     Ok(emit(ctx, "max", m))
 }
 pub fn sum(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
@@ -156,11 +156,11 @@ fn collect_numbers(args: &[Value], line: usize, what: &str) -> Result<Vec<f64>, 
         if let Value::List(items) = v {
             for it in items {
                 out.push(it.as_f64()
-                    .ok_or_else(|| RuntimeError::new(400, line, format!("{}: list item is not a number: {:?}", what, it)))?);
+                    .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: list item is not a number: {it:?}")))?);
             }
         } else {
             out.push(v.as_f64()
-                .ok_or_else(|| RuntimeError::new(400, line, format!("{}: arg is not a number: {:?}", what, v)))?);
+                .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: arg is not a number: {v:?}")))?);
         }
     }
     Ok(out)

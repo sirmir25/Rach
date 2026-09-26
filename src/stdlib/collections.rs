@@ -6,7 +6,7 @@ use crate::ast::Value;
 use crate::interpreter::{Ctx, RuntimeError};
 
 fn first<'a>(args: &'a [Value], line: usize, what: &str) -> Result<&'a Value, RuntimeError> {
-    args.first().ok_or_else(|| RuntimeError::new(400, line, format!("{} requires an argument", what)))
+    args.first().ok_or_else(|| RuntimeError::new(400, line, format!("{what} requires an argument")))
 }
 
 fn nth<'a>(args: &'a [Value], n: usize, line: usize, what: &str) -> Result<&'a Value, RuntimeError> {
@@ -27,7 +27,7 @@ pub fn len(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError
         Value::List(items) => items.len() as i64,
         Value::Map(m) => m.len() as i64,
         Value::Nil => 0,
-        other => return Err(RuntimeError::new(400, line, format!("len: not measurable: {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("len: not measurable: {other:?}"))),
     };
     let result = Value::Int(n);
     emit_value(ctx, "len", &result);
@@ -36,7 +36,7 @@ pub fn len(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError
 
 pub fn split(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let s = first(args, line, "split")?.as_str();
-    let sep = args.get(1).map(|v| v.as_str()).unwrap_or_else(|| " ".to_string());
+    let sep = args.get(1).map_or_else(|| " ".to_string(), Value::as_str);
     let parts: Vec<Value> = if sep.is_empty() {
         s.chars().map(|c| Value::Str(c.to_string())).collect()
     } else {
@@ -49,12 +49,12 @@ pub fn split(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeErr
 
 pub fn join(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let list = first(args, line, "join")?;
-    let sep = args.get(1).map(|v| v.as_str()).unwrap_or_default();
+    let sep = args.get(1).map(Value::as_str).unwrap_or_default();
     let items = match list {
         Value::List(xs) => xs,
-        other => return Err(RuntimeError::new(400, line, format!("join: first arg must be a list, got {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("join: first arg must be a list, got {other:?}"))),
     };
-    let joined = items.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(&sep);
+    let joined = items.iter().map(Value::as_str).collect::<Vec<_>>().join(&sep);
     let result = Value::Str(joined);
     emit_value(ctx, "join", &result);
     Ok(result)
@@ -67,7 +67,7 @@ pub fn contains(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, Runtime
         Value::Str(s) => s.contains(&needle.as_str()),
         Value::List(items) => items.iter().any(|v| crate::interpreter::values_equal_pub(v, needle)),
         Value::Map(m) => m.contains_key(&needle.as_str()),
-        other => return Err(RuntimeError::new(400, line, format!("contains: cannot search in {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("contains: cannot search in {other:?}"))),
     };
     let result = Value::Bool(found);
     emit_value(ctx, "contains", &result);
@@ -78,23 +78,23 @@ pub fn slice(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeErr
     let target = first(args, line, "slice")?;
     let start = nth(args, 1, line, "slice")?.as_f64()
         .ok_or_else(|| RuntimeError::new(400, line, "slice: start must be int"))? as i64;
-    let end_opt = args.get(2).and_then(|v| v.as_f64()).map(|f| f as i64);
+    let end_opt = args.get(2).and_then(Value::as_f64).map(|f| f as i64);
 
     let result = match target {
         Value::Str(s) => {
             let chars: Vec<char> = s.chars().collect();
             let n = chars.len() as i64;
             let lo = clamp_index(start, n);
-            let hi = end_opt.map(|e| clamp_index(e, n)).unwrap_or(n as usize);
+            let hi = end_opt.map_or(n as usize, |e| clamp_index(e, n));
             Value::Str(chars[lo..hi.max(lo)].iter().collect())
         }
         Value::List(items) => {
             let n = items.len() as i64;
             let lo = clamp_index(start, n);
-            let hi = end_opt.map(|e| clamp_index(e, n)).unwrap_or(n as usize);
+            let hi = end_opt.map_or(n as usize, |e| clamp_index(e, n));
             Value::List(items[lo..hi.max(lo)].to_vec())
         }
-        other => return Err(RuntimeError::new(400, line, format!("slice: cannot slice {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("slice: cannot slice {other:?}"))),
     };
     emit_value(ctx, "slice", &result);
     Ok(result)
@@ -109,7 +109,7 @@ pub fn append(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeEr
     let list = first(args, line, "append")?;
     let items = match list {
         Value::List(xs) => xs.clone(),
-        other => return Err(RuntimeError::new(400, line, format!("append: first arg must be a list, got {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("append: first arg must be a list, got {other:?}"))),
     };
     let mut new_list = items;
     for v in &args[1..] {
@@ -124,7 +124,7 @@ pub fn pop(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError
     let list = first(args, line, "pop")?;
     let items = match list {
         Value::List(xs) => xs,
-        other => return Err(RuntimeError::new(400, line, format!("pop: not a list: {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("pop: not a list: {other:?}"))),
     };
     if items.is_empty() {
         return Err(RuntimeError::new(400, line, "pop: empty list"));
@@ -138,7 +138,7 @@ pub fn sorted(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeEr
     let list = first(args, line, "sorted")?;
     let items = match list {
         Value::List(xs) => xs.clone(),
-        other => return Err(RuntimeError::new(400, line, format!("sorted: not a list: {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("sorted: not a list: {other:?}"))),
     };
     let mut nums: Vec<(f64, Value)> = items.into_iter()
         .map(|v| (v.as_f64().unwrap_or(0.0), v))
@@ -158,7 +158,7 @@ pub fn reverse(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeE
             copy.reverse();
             Value::List(copy)
         }
-        other => return Err(RuntimeError::new(400, line, format!("reverse: cannot reverse {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("reverse: cannot reverse {other:?}"))),
     };
     emit_value(ctx, "reverse", &result);
     Ok(result)
@@ -195,7 +195,7 @@ pub fn map_keys(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, Runtime
     let m = first(args, line, "map_keys")?;
     let map = match m {
         Value::Map(m) => m,
-        other => return Err(RuntimeError::new(400, line, format!("map_keys: not a map: {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("map_keys: not a map: {other:?}"))),
     };
     let result = Value::List(map.keys().map(|k| Value::Str(k.clone())).collect());
     emit_value(ctx, "map_keys", &result);
@@ -206,7 +206,7 @@ pub fn map_values(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, Runti
     let m = first(args, line, "map_values")?;
     let map = match m {
         Value::Map(m) => m,
-        other => return Err(RuntimeError::new(400, line, format!("map_values: not a map: {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("map_values: not a map: {other:?}"))),
     };
     let result = Value::List(map.values().cloned().collect());
     emit_value(ctx, "map_values", &result);
@@ -220,7 +220,7 @@ pub fn map_set(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeE
     let mut map: BTreeMap<String, Value> = match m {
         Value::Map(m) => m.clone(),
         Value::Nil => BTreeMap::new(),
-        other => return Err(RuntimeError::new(400, line, format!("map_set: not a map: {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("map_set: not a map: {other:?}"))),
     };
     map.insert(key, value);
     let result = Value::Map(map);
@@ -247,7 +247,7 @@ pub fn range(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeErr
                 .ok_or_else(|| RuntimeError::new(400, line, "range: start must be a number"))? as i64;
             let e = nth(args, 1, line, "range")?.as_f64()
                 .ok_or_else(|| RuntimeError::new(400, line, "range: end must be a number"))? as i64;
-            let st = args.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0) as i64;
+            let st = args.get(2).and_then(Value::as_f64).unwrap_or(1.0) as i64;
             (s, e, st)
         }
         _ => return Err(RuntimeError::new(400, line, "range: requires 1, 2, or 3 arguments")),
@@ -266,10 +266,10 @@ pub fn range(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeErr
 
 pub fn enumerate(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let list = first(args, line, "enumerate")?;
-    let start = args.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0) as i64;
+    let start = args.get(1).and_then(Value::as_f64).unwrap_or(0.0) as i64;
     let items = match list {
         Value::List(xs) => xs,
-        other => return Err(RuntimeError::new(400, line, format!("enumerate: expected list, got {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("enumerate: expected list, got {other:?}"))),
     };
     let result = Value::List(
         items.iter().enumerate()
@@ -285,7 +285,7 @@ pub fn keys(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeErro
     let result = match m {
         Value::Map(map) => Value::List(map.keys().map(|k| Value::Str(k.clone())).collect()),
         Value::Struct { fields, .. } => Value::List(fields.keys().map(|k| Value::Str(k.clone())).collect()),
-        other => return Err(RuntimeError::new(400, line, format!("keys: expected map, got {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("keys: expected map, got {other:?}"))),
     };
     emit_value(ctx, "keys", &result);
     Ok(result)
@@ -296,7 +296,7 @@ pub fn values(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeEr
     let result = match m {
         Value::Map(map) => Value::List(map.values().cloned().collect()),
         Value::Struct { fields, .. } => Value::List(fields.values().cloned().collect()),
-        other => return Err(RuntimeError::new(400, line, format!("values: expected map, got {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("values: expected map, got {other:?}"))),
     };
     emit_value(ctx, "values", &result);
     Ok(result)
@@ -308,7 +308,7 @@ pub fn zip(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError
     }
     let lists: Vec<&Vec<Value>> = args.iter().map(|a| match a {
         Value::List(xs) => Ok(xs),
-        other => Err(RuntimeError::new(400, line, format!("zip: expected list, got {:?}", other))),
+        other => Err(RuntimeError::new(400, line, format!("zip: expected list, got {other:?}"))),
     }).collect::<Result<_, _>>()?;
     let min_len = lists.iter().map(|l| l.len()).min().unwrap_or(0);
     let result = Value::List(
@@ -322,7 +322,7 @@ pub fn flatten(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeE
     let list = first(args, line, "flatten")?;
     let items = match list {
         Value::List(xs) => xs,
-        other => return Err(RuntimeError::new(400, line, format!("flatten: expected list, got {:?}", other))),
+        other => return Err(RuntimeError::new(400, line, format!("flatten: expected list, got {other:?}"))),
     };
     let result = Value::List(
         items.iter().flat_map(|v| match v {

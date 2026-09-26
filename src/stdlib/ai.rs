@@ -1,33 +1,33 @@
 /// AI code generator with two backends:
 ///
 /// 1. **Live LLM** (preferred): if `ANTHROPIC_API_KEY` is set, call the Claude
-///    Messages API via `curl` and serde_json. No new Rust deps. The model is
+///    Messages API via `curl` and `serde_json`. No new Rust deps. The model is
 ///    `claude-haiku-4-5-20251001` by default (fast, cheap); override with
 ///    `RACH_LLM_MODEL`. Limited to 1024 output tokens.
 /// 2. **Templates** (fallback): heuristic snippets for a few canonical tasks.
 ///    Always available, even offline.
 pub fn ai_generate(language: &str, task: &str, line: usize) {
     let lang = language.to_ascii_lowercase();
-    println!("# ---- ai_generate({}, {:?}) [line {}] ----", lang, task, line);
+    println!("# ---- ai_generate({lang}, {task:?}) [line {line}] ----");
 
     if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
         if !key.is_empty() {
             match call_claude(&key, &lang, task) {
                 Ok(text) => {
-                    println!("{}", text);
+                    println!("{text}");
                     println!("# ---- end ai_generate (claude) ----");
                     println!("completed");
                     return;
                 }
                 Err(e) => {
-                    eprintln!("// claude call failed: {} — falling back to templates", e);
+                    eprintln!("// claude call failed: {e} — falling back to templates");
                 }
             }
         }
     }
 
     let body = generate(&lang, task);
-    println!("{}", body);
+    println!("{body}");
     println!("# ---- end ai_generate (templates) ----");
     println!("completed");
 }
@@ -37,8 +37,7 @@ fn call_claude(api_key: &str, lang: &str, task: &str) -> Result<String, String> 
 
     let model = std::env::var("RACH_LLM_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string());
     let prompt = format!(
-        "Generate idiomatic, runnable {} code for this task:\n\n{}\n\nRespond with code only — no markdown fences, no commentary. Keep it minimal but complete.",
-        lang, task
+        "Generate idiomatic, runnable {lang} code for this task:\n\n{task}\n\nRespond with code only — no markdown fences, no commentary. Keep it minimal but complete."
     );
 
     let body = serde_json::json!({
@@ -52,13 +51,13 @@ fn call_claude(api_key: &str, lang: &str, task: &str) -> Result<String, String> 
         .arg("-sS")
         .arg("-X").arg("POST")
         .arg("https://api.anthropic.com/v1/messages")
-        .arg("-H").arg(format!("x-api-key: {}", api_key))
+        .arg("-H").arg(format!("x-api-key: {api_key}"))
         .arg("-H").arg("anthropic-version: 2023-06-01")
         .arg("-H").arg("content-type: application/json")
         .arg("--max-time").arg("60")
         .arg("-d").arg(&body_str)
         .output()
-        .map_err(|e| format!("spawn curl: {}", e))?;
+        .map_err(|e| format!("spawn curl: {e}"))?;
 
     if !output.status.success() {
         return Err(format!("curl exit {:?}: {}", output.status.code(), String::from_utf8_lossy(&output.stderr)));
@@ -66,16 +65,16 @@ fn call_claude(api_key: &str, lang: &str, task: &str) -> Result<String, String> 
 
     let resp_text = String::from_utf8_lossy(&output.stdout);
     let resp: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| format!("parse json: {} — body was: {}", e, resp_text))?;
+        .map_err(|e| format!("parse json: {e} — body was: {resp_text}"))?;
 
     if let Some(err) = resp.get("error") {
-        return Err(format!("api error: {}", err));
+        return Err(format!("api error: {err}"));
     }
 
     let text = resp.get("content")
         .and_then(|c| c.as_array())
         .and_then(|arr| arr.iter().find_map(|b| b.get("text").and_then(|t| t.as_str())))
-        .ok_or_else(|| format!("unexpected response shape: {}", resp_text))?;
+        .ok_or_else(|| format!("unexpected response shape: {resp_text}"))?;
 
     Ok(text.to_string())
 }
@@ -89,7 +88,7 @@ fn generate(lang: &str, task: &str) -> String {
         "c++" | "cpp" | "cxx" => cpp_for(&t, task),
         "c" => c_for(&t, task),
         "zig" => zig_for(&t, task),
-        other => format!("// language `{}` not in the built-in ai_generate catalogue\n// task: {}", other, task),
+        other => format!("// language `{other}` not in the built-in ai_generate catalogue\n// task: {task}"),
     }
 }
 
@@ -118,7 +117,7 @@ elif command -v brew    >/dev/null; then brew update && brew upgrade
 else echo "no known package manager" >&2; exit 1
 fi"#.to_string();
     }
-    format!("#!/usr/bin/env bash\nset -euo pipefail\n# task: {}\necho 'TODO: implement task'\n", raw)
+    format!("#!/usr/bin/env bash\nset -euo pipefail\n# task: {raw}\necho 'TODO: implement task'\n")
 }
 
 fn python_for(t: &str, raw: &str) -> String {
@@ -142,12 +141,12 @@ if __name__ == "__main__":
 "#.to_string();
     }
     if t.contains("json") && t.contains("parse") {
-        return r#"import json, sys
+        return r"import json, sys
 data = json.load(sys.stdin)
 print(json.dumps(data, indent=2, ensure_ascii=False))
-"#.to_string();
+".to_string();
     }
-    format!("# task: {}\nprint('TODO: implement task')\n", raw)
+    format!("# task: {raw}\nprint('TODO: implement task')\n")
 }
 
 fn rust_for(t: &str, raw: &str) -> String {
@@ -179,7 +178,7 @@ fn main() -> std::io::Result<()> {
 }
 "#.to_string();
     }
-    format!("// task: {}\nfn main() {{ println!(\"TODO: implement task\"); }}\n", raw)
+    format!("// task: {raw}\nfn main() {{ println!(\"TODO: implement task\"); }}\n")
 }
 
 fn cpp_for(t: &str, raw: &str) -> String {
@@ -196,7 +195,7 @@ int main(int argc, char** argv) {
 }
 "#.to_string();
     }
-    format!("#include <iostream>\nint main() {{\n    // task: {}\n    std::cout << \"TODO\\n\";\n}}\n", raw)
+    format!("#include <iostream>\nint main() {{\n    // task: {raw}\n    std::cout << \"TODO\\n\";\n}}\n")
 }
 
 fn c_for(t: &str, raw: &str) -> String {
@@ -216,7 +215,7 @@ int main(int argc, char** argv) {
 }
 "#.to_string();
     }
-    format!("#include <stdio.h>\nint main(void) {{\n    /* task: {} */\n    puts(\"TODO\");\n    return 0;\n}}\n", raw)
+    format!("#include <stdio.h>\nint main(void) {{\n    /* task: {raw} */\n    puts(\"TODO\");\n    return 0;\n}}\n")
 }
 
 fn zig_for(t: &str, raw: &str) -> String {
@@ -240,5 +239,5 @@ pub fn main() !void {
 }
 "#.to_string();
     }
-    format!("const std = @import(\"std\");\npub fn main() !void {{\n    // task: {}\n    try std.io.getStdOut().writer().print(\"TODO\\n\", .{{}});\n}}\n", raw)
+    format!("const std = @import(\"std\");\npub fn main() !void {{\n    // task: {raw}\n    try std.io.getStdOut().writer().print(\"TODO\\n\", .{{}});\n}}\n")
 }

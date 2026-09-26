@@ -1,4 +1,4 @@
-//! Interactive REPL — Python-style. Variables, functions, and the WebDriver
+//! Interactive REPL — Python-style. Variables, functions, and the `WebDriver`
 //! session persist across prompts. Multi-line input is collected when an input
 //! line ends with `:` (block header) or starts with `rach <name>(...)`
 //! (function definition); reading stops on an empty line.
@@ -13,11 +13,12 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const PROMPT: &str = "rach> ";
 const CONT:   &str = "...   ";
 
+#[must_use]
 pub fn run() -> i32 {
-    let strict = std::env::var("RACH_STRICT").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let strict = std::env::var("RACH_STRICT").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let mut ctx = interpreter::make_ctx(strict, String::new(), "<repl>".to_string());
 
-    println!("Rach {} — interactive console. Ctrl-D / `exit` to quit.", VERSION);
+    println!("Rach {VERSION} — interactive console. Ctrl-D / `exit` to quit.");
     println!("Type any Rach statement; multi-line blocks end at an empty line.");
     println!();
 
@@ -26,7 +27,7 @@ pub fn run() -> i32 {
     let mut stdin_lock = stdin.lock();
 
     loop {
-        print!("{}", PROMPT);
+        print!("{PROMPT}");
         let _ = stdout.flush();
 
         let mut buf = String::new();
@@ -43,7 +44,7 @@ pub fn run() -> i32 {
         let mut combined = trimmed.clone();
         if needs_continuation(&trimmed) {
             loop {
-                print!("{}", CONT);
+                print!("{CONT}");
                 let _ = stdout.flush();
                 let mut more = String::new();
                 match stdin_lock.read_line(&mut more) {

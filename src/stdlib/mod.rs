@@ -75,6 +75,7 @@ const KNOWN: &[&str] = &[
 /// Single-word match — used by parser to decide if `name(...)` is a known
 /// command vs. a user-fn call. Multi-word commands are matched separately
 /// via the longest-prefix algorithm in `resolve_resolved_segments`.
+#[must_use]
 pub fn is_known_command(word: &str) -> bool {
     KNOWN.iter().any(|k| k.starts_with(word) && (k.len() == word.len() || k.as_bytes()[word.len()] == b'_'))
 }
@@ -132,7 +133,7 @@ pub fn resolve_resolved_segments(
     Err(format!("unknown command `{}`", all_words.join("_")))
 }
 
-/// A CallSegment with its Exprs already evaluated to Values.
+/// A `CallSegment` with its Exprs already evaluated to Values.
 pub struct ResolvedSegment {
     pub words: Vec<String>,
     pub positional: Vec<Value>,
@@ -171,8 +172,8 @@ pub fn dispatch(
     match canonical {
         // ---- print ----
         "print" => {
-            let s: String = positional.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(" ");
-            println!("{}", s);
+            let s: String = positional.iter().map(Value::as_str).collect::<Vec<_>>().join(" ");
+            println!("{s}");
             Ok(Value::Str(s))
         }
 
@@ -323,6 +324,6 @@ pub fn dispatch(
         "http_get"  => http::http_get(positional, line, ctx),
         "http_post" => http::http_post(positional, line, ctx),
 
-        other => Err(RuntimeError::new(404, line, format!("unknown command `{}`", other))),
+        other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }
 }
