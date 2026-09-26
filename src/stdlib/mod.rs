@@ -48,6 +48,7 @@ const KNOWN: &[&str] = &[
     // ascii art
     "ascii_banner", "ascii_box", "ascii_pyramid", "ascii_diamond",
     "ascii_border", "ascii_mirror", "ascii_table", "ascii_text",
+    "ascii_sparkline", "ascii_bars", "ascii_progress", "ascii_plot",
     // native (C / C++)
     "native_crc32", "native_base64", "native_sort_ints", "native_reverse",
     "run_c", "run_cpp",
@@ -248,6 +249,10 @@ pub fn dispatch(
         "ascii_mirror"  => ascii::mirror(positional, line),
         "ascii_table"   => ascii::table(positional, kwargs, line),
         "ascii_text"    => ascii_art::ascii_text(positional, kwargs, line, ctx),
+        "ascii_sparkline" => ascii_art::ascii_sparkline(positional, kwargs, line, ctx),
+        "ascii_bars"      => ascii_art::ascii_bars(positional, kwargs, line, ctx),
+        "ascii_progress"  => ascii_art::ascii_progress(positional, kwargs, line, ctx),
+        "ascii_plot"      => ascii_art::ascii_plot(positional, kwargs, line, ctx),
 
         // ---- native (C / C++) ----
         "native_crc32"     => native::native_crc32(positional, line, ctx),

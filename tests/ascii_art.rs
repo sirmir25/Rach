@@ -61,3 +61,41 @@ fn shadow_and_multiline() {
     let two = s("ascii_text(\"A\\nB\", style=\"ascii\")");
     assert_eq!(two.lines().count(), 15, "two 7-row lines + 1 row of spacing");
 }
+
+#[test]
+fn sparkline_maps_min_to_lowest_and_max_to_highest() {
+    assert_eq!(s("ascii_sparkline([0, 7, 14, 7, 0])"), "▁▅█▅▁", "3.5 of 7 levels rounds up");
+    assert_eq!(s("ascii_sparkline([5, 5, 5])"), "▄▄▄", "flat data sits mid-height");
+    assert!(run("ascii_sparkline([1, \"x\"])").is_err());
+}
+
+#[test]
+fn bars_scale_to_the_largest_value_with_eighth_precision() {
+    let out = s("ascii_bars([[\"a\", 8], [\"bb\", 4], [\"c\", 1]], width=8)");
+    assert_eq!(out, ["a  │████████ 8", "bb │████ 4", "c  │█ 1"].join("\n"));
+    let fine = s("ascii_bars([[\"x\", 16], [\"y\", 1]], width=2)");
+    assert!(fine.lines().nth(1).unwrap().contains('▏'), "1/16 of 2 cells = one eighth-block: {fine}");
+    let from_map = s("ascii_bars({\"b\": 2, \"a\": 1}, width=4)");
+    assert!(from_map.starts_with("a │"), "maps list in key order: {from_map}");
+    assert!(run("ascii_bars([1, -2])").unwrap_err().contains(">= 0"));
+}
+
+#[test]
+fn progress_bar() {
+    assert_eq!(s("ascii_progress(50, 100, width=10)"), "[█████░░░░░]  50%");
+    assert_eq!(s("ascii_progress(250, width=4)"), "[████] 100%", "clamped to 100%");
+    assert_eq!(s("ascii_progress(0, 5, width=3)"), "[░░░]   0%");
+    assert!(run("ascii_progress(1, 0)").is_err());
+}
+
+#[test]
+fn plot_draws_a_labelled_braille_line() {
+    let out = s("ascii_plot([0, 10], width=5, height=3)");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 4, "3 chart rows + axis:\n{out}");
+    assert!(lines[0].starts_with("10 ┤"), "{out}");
+    assert!(lines[2].starts_with(" 0 ┤"), "{out}");
+    assert!(lines[3].ends_with("└─────"));
+    assert!(out.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)));
+    assert!(run("ascii_plot([1])").unwrap_err().contains("at least 2"));
+}

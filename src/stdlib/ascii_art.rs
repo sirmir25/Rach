@@ -148,3 +148,138 @@ pub fn ascii_text(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Re
     };
     Ok(emit_art(ctx, canvas.render(mode)))
 }
+
+// ---------------- charts ----------------
+
+const EIGHTHS: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+const SPARKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+fn numbers(v: &Value, line: usize, what: &str) -> Result<Vec<f64>, RuntimeError> {
+    let Value::List(items) = v else {
+        return Err(RuntimeError::new(400, line, format!("{what}: expected a list of numbers, got {}", v.as_str())));
+    };
+    items.iter().map(|x| match x {
+        Value::Int(_) | Value::Float(_) => x.as_f64().filter(|f| f.is_finite()),
+        _ => None,
+    }.ok_or_else(|| RuntimeError::new(400, line, format!("{what}: `{}` is not a finite number", x.as_str())))).collect()
+}
+
+/// Integers print without a decimal point; everything else with up to two decimals.
+fn fmt_num(x: f64) -> String {
+    if x.fract() == 0.0 && x.abs() < 1e15 {
+        format!("{}", x as i64)
+    } else {
+        let s = format!("{x:.2}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+/// A bar `fraction` (0..=1) of `width` cells long, with 1/8-cell precision.
+fn bar(fraction: f64, width: usize) -> String {
+    let eighths = (fraction.clamp(0.0, 1.0) * (width * 8) as f64).round() as usize;
+    let mut s = "█".repeat(eighths / 8);
+    if !eighths.is_multiple_of(8) { s.push(EIGHTHS[eighths % 8 - 1]); }
+    s
+}
+
+fn width_arg(args: &[Value], n: usize, kwargs: &Kwargs, key: &str, default: i64, line: usize, what: &str) -> Result<usize, RuntimeError> {
+    let w = int_arg(args, n, kwargs, key, default, line, what)?;
+    usize::try_from(w).ok().filter(|w| (1..=1000).contains(w))
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: {key} must be 1..=1000")))
+}
+
+pub fn ascii_sparkline(args: &[Value], _kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let what = "ascii_sparkline";
+    let xs = numbers(args.first().unwrap_or(&Value::Nil), line, what)?;
+    let (lo, hi) = xs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
+    let s: String = xs.iter().map(|x| {
+        if hi > lo { SPARKS[(((x - lo) / (hi - lo)) * 7.0).round() as usize] } else { SPARKS[3] }
+    }).collect();
+    Ok(emit_art(ctx, s))
+}
+
+/// `data` is a map (label → value), a list of numbers (labelled 1..n), or a list of
+/// `[label, value]` pairs (keeps your order).
+fn labelled(data: &Value, line: usize, what: &str) -> Result<Vec<(String, f64)>, RuntimeError> {
+    let bad = |v: &Value| RuntimeError::new(400, line, format!("{what}: `{}` is not a finite number", v.as_str()));
+    let num = |v: &Value| v.as_f64().filter(|f| f.is_finite() && matches!(v, Value::Int(_) | Value::Float(_))).ok_or_else(|| bad(v));
+    match data {
+        Value::Map(m) => m.iter().map(|(k, v)| Ok((k.clone(), num(v)?))).collect(),
+        Value::List(items) => items.iter().enumerate().map(|(i, item)| match item {
+            Value::List(pair) if pair.len() == 2 => Ok((pair[0].as_str(), num(&pair[1])?)),
+            other => Ok(((i + 1).to_string(), num(other)?)),
+        }).collect(),
+        other => Err(RuntimeError::new(400, line, format!("{what}: expected a map or list, got {}", other.as_str()))),
+    }
+}
+
+pub fn ascii_bars(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let what = "ascii_bars";
+    let rows = labelled(args.first().unwrap_or(&Value::Nil), line, what)?;
+    let width = width_arg(args, 1, kwargs, "width", 40, line, what)?;
+    if rows.iter().any(|(_, v)| *v < 0.0) {
+        return Err(RuntimeError::new(400, line, format!("{what}: values must be >= 0")));
+    }
+    let max = rows.iter().map(|(_, v)| *v).fold(0.0, f64::max);
+    let label_w = rows.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(0);
+    let lines: Vec<String> = rows.iter().map(|(label, v)| {
+        let pad = " ".repeat(label_w - label.chars().count());
+        let b = if max > 0.0 { bar(v / max, width) } else { String::new() };
+        format!("{label}{pad} │{b} {}", fmt_num(*v))
+    }).collect();
+    Ok(emit_art(ctx, lines.join("\n")))
+}
+
+pub fn ascii_progress(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let what = "ascii_progress";
+    let value = args.first().and_then(Value::as_f64)
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: first argument must be a number")))?;
+    let total = args.get(1).cloned().or_else(|| kwargs.get("total").and_then(|v| v.first().cloned()))
+        .map_or(Some(100.0), |v| v.as_f64())
+        .filter(|t| *t > 0.0)
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: total must be a positive number")))?;
+    let width = width_arg(args, 2, kwargs, "width", 30, line, what)?;
+    let fraction = (value / total).clamp(0.0, 1.0);
+    let filled = bar(fraction, width);
+    let empty = "░".repeat(width - filled.chars().count());
+    Ok(emit_art(ctx, format!("[{filled}{empty}] {:>3}%", (fraction * 100.0).round() as i64)))
+}
+
+/// Line chart in braille (2×4 dots per character) with min/max labels on the left axis.
+pub fn ascii_plot(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let what = "ascii_plot";
+    let ys = numbers(args.first().unwrap_or(&Value::Nil), line, what)?;
+    if ys.len() < 2 { return Err(RuntimeError::new(400, line, format!("{what}: need at least 2 points"))); }
+    let width = width_arg(args, 1, kwargs, "width", 60, line, what)?;
+    let height = width_arg(args, 2, kwargs, "height", 12, line, what)?;
+    let (pw, ph) = (width * 2, height * 4);
+    let (lo, hi) = ys.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), y| (lo.min(*y), hi.max(*y)));
+    let span = if hi > lo { hi - lo } else { 1.0 };
+    let to_px = |i: usize, y: f64| -> (i64, i64) {
+        let x = (i as f64 * (pw - 1) as f64 / (ys.len() - 1) as f64).round() as i64;
+        let py = ((hi - y) / span * (ph - 1) as f64).round() as i64;
+        (x, py)
+    };
+    let mut canvas = Canvas::new(pw, ph);
+    for i in 1..ys.len() {
+        let (x0, y0) = to_px(i - 1, ys[i - 1]);
+        let (x1, y1) = to_px(i, ys[i]);
+        canvas.line(x0, y0, x1, y1);
+    }
+    let chart = canvas.render(Render::Braille);
+    let (top, bottom) = (fmt_num(hi), fmt_num(lo));
+    let label_w = top.chars().count().max(bottom.chars().count());
+    let rows: Vec<&str> = chart.split('\n').collect();
+    let mut out: Vec<String> = Vec::with_capacity(height + 1);
+    for r in 0..height {
+        let body = rows.get(r).copied().unwrap_or("");
+        let (label, tick) = match r {
+            0 => (top.as_str(), '┤'),
+            _ if r == height - 1 => (bottom.as_str(), '┤'),
+            _ => ("", '│'),
+        };
+        out.push(format!("{label:>label_w$} {tick}{body}").trim_end().to_string());
+    }
+    out.push(format!("{} └{}", " ".repeat(label_w), "─".repeat(width)));
+    Ok(emit_art(ctx, out.join("\n")))
+}
