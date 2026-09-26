@@ -90,7 +90,7 @@ const KNOWN: &[&str] = &[
     "columnar_encrypt", "columnar_decrypt", "polybius_encrypt", "polybius_decrypt",
     "bifid_encrypt", "bifid_decrypt", "adfgvx_encrypt", "adfgvx_decrypt",
     "bacon_encrypt", "bacon_decrypt", "morse_encode", "morse_decode",
-    "enigma",
+    "enigma", "vigenere_crack", "caesar_crack", "index_of_coincidence", "letter_frequencies",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -402,6 +402,10 @@ pub fn dispatch(
         "morse_encode"       => cipher::morse_encode(positional, kwargs, line, ctx),
         "morse_decode"       => cipher::morse_decode(positional, kwargs, line, ctx),
         "enigma"             => enigma::enigma(positional, kwargs, line, ctx),
+        "vigenere_crack"       => cipher::vigenere_crack(positional, kwargs, line, ctx),
+        "caesar_crack"         => cipher::caesar_crack(positional, kwargs, line, ctx),
+        "index_of_coincidence" => cipher::index_of_coincidence(positional, kwargs, line, ctx),
+        "letter_frequencies"   => cipher::letter_frequencies(positional, kwargs, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }

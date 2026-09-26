@@ -6,6 +6,8 @@
 //! letters) or `alphabet="ru"` (33 letters, Ё included). Case is preserved and characters
 //! outside the alphabet pass through untouched without consuming key letters.
 
+use std::collections::BTreeMap;
+
 use crate::ast::Value;
 use crate::interpreter::{Ctx, RuntimeError};
 use crate::stdlib::args::{emit_text, int_arg, kw_str, str_arg, Kwargs};
@@ -13,17 +15,34 @@ use crate::stdlib::args::{emit_text, int_arg, kw_str, str_arg, Kwargs};
 pub struct Alphabet {
     upper: Vec<char>,
     lower: Vec<char>,
+    /// Relative letter frequencies of the language, in alphabet order (for cryptanalysis).
+    freq: &'static [f64],
 }
+
+/// English letter frequencies (Lewand, *Cryptological Mathematics*).
+const EN_FREQ: [f64; 26] = [
+    0.08167, 0.01492, 0.02782, 0.04253, 0.12702, 0.02228, 0.02015, 0.06094, 0.06966, 0.00153,
+    0.00772, 0.04025, 0.02406, 0.06749, 0.07507, 0.01929, 0.00095, 0.05987, 0.06327, 0.09056,
+    0.02758, 0.00978, 0.02360, 0.00150, 0.01974, 0.00074,
+];
+
+/// Russian letter frequencies (Национальный корпус русского языка), А..Я with Ё after Е.
+const RU_FREQ: [f64; 33] = [
+    0.0801, 0.0159, 0.0454, 0.0170, 0.0298, 0.0845, 0.0004, 0.0094, 0.0165, 0.0735, 0.0121,
+    0.0349, 0.0440, 0.0321, 0.0670, 0.1097, 0.0281, 0.0473, 0.0547, 0.0626, 0.0262, 0.0026,
+    0.0097, 0.0048, 0.0144, 0.0073, 0.0036, 0.0004, 0.0190, 0.0174, 0.0032, 0.0064, 0.0201,
+];
 
 impl Alphabet {
     pub fn english() -> Self {
-        Alphabet { upper: ('A'..='Z').collect(), lower: ('a'..='z').collect() }
+        Alphabet { upper: ('A'..='Z').collect(), lower: ('a'..='z').collect(), freq: &EN_FREQ }
     }
 
     pub fn russian() -> Self {
         Alphabet {
             upper: "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ".chars().collect(),
             lower: "абвгдеёжзийклмнопрстуфхцчшщъыьэюя".chars().collect(),
+            freq: &RU_FREQ,
         }
     }
 
@@ -592,4 +611,150 @@ pub fn morse_decode(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> 
     let t = str_arg(args, 0, line, "morse_decode")?;
     let table = morse_table(kwargs, line, "morse_decode")?;
     lifted(morse_decode_text(&t, table), line, "morse_decode", ctx)
+}
+
+// ---------------- cryptanalysis ----------------
+//
+// Babbage broke Vigenère around 1854 (never published; Kasiski did independently in 1863):
+// repeated fragments in the ciphertext give away the key length, and once you know it, each
+// key letter is just a Caesar shift you can find by frequency analysis. We find the length the
+// statistically tidier way (Friedman's index of coincidence, 1922) and each shift by
+// chi-squared against the language's letter frequencies.
+
+fn letter_indices(text: &str, abc: &Alphabet) -> Vec<usize> {
+    text.chars().filter_map(|c| abc.index(c).map(|(i, _)| i)).collect()
+}
+
+pub fn index_of_coincidence_of(letters: &[usize], n: usize) -> f64 {
+    let total = letters.len();
+    if total < 2 { return 0.0; }
+    let mut counts = vec![0usize; n];
+    for &l in letters { counts[l] += 1; }
+    let pairs: usize = counts.iter().map(|c| c * c.saturating_sub(1)).sum();
+    pairs as f64 / (total * (total - 1)) as f64
+}
+
+/// Shift that makes `letters` look most like the language (lowest chi-squared).
+fn best_shift(letters: &[usize], abc: &Alphabet) -> usize {
+    let n = abc.size();
+    let total = letters.len().max(1) as f64;
+    let mut counts = vec![0usize; n];
+    for &l in letters { counts[l] += 1; }
+    (0..n).min_by(|&a, &b| {
+        let chi = |shift: usize| -> f64 {
+            (0..n).map(|plain| {
+                let observed = counts[(plain + shift) % n] as f64;
+                let expected = abc.freq[plain] * total;
+                (observed - expected).powi(2) / expected
+            }).sum()
+        };
+        chi(a).total_cmp(&chi(b))
+    }).unwrap_or(0)
+}
+
+/// Most likely key length: the shortest length whose columns look like natural language
+/// (average IC within 10% of the best seen). Taking the *shortest* stops multiples of the true
+/// length — which score just as well — from winning.
+fn guess_key_length(letters: &[usize], n: usize, max_len: usize) -> usize {
+    let scores: Vec<(usize, f64)> = (1..=max_len)
+        .filter(|l| letters.len() / l >= 2)
+        .map(|l| {
+            let avg = (0..l).map(|col| {
+                let column: Vec<usize> = letters.iter().skip(col).step_by(l).copied().collect();
+                index_of_coincidence_of(&column, n)
+            }).sum::<f64>() / l as f64;
+            (l, avg)
+        })
+        .collect();
+    let best = scores.iter().map(|(_, s)| *s).fold(0.0, f64::max);
+    scores.iter().find(|(_, s)| *s >= best * 0.9).map_or(1, |(l, _)| *l)
+}
+
+/// A key that repeats itself ("KEYKEY") enciphers exactly like its period ("KEY"), so reduce
+/// to the shortest one — this also absorbs the case where short texts make a multiple of the
+/// true length score best.
+fn minimal_period(key: &[usize]) -> Vec<usize> {
+    let n = key.len();
+    let p = (1..=n).find(|p| n.is_multiple_of(*p) && (0..n).all(|i| key[i] == key[i % p])).unwrap_or(n);
+    key[..p].to_vec()
+}
+
+pub fn crack_vigenere(text: &str, abc: &Alphabet, max_len: usize) -> Vec<usize> {
+    let letters = letter_indices(text, abc);
+    let len = guess_key_length(&letters, abc.size(), max_len);
+    let key: Vec<usize> = (0..len).map(|col| {
+        let column: Vec<usize> = letters.iter().skip(col).step_by(len).copied().collect();
+        best_shift(&column, abc)
+    }).collect();
+    minimal_period(&key)
+}
+
+fn result_map(ctx: &Ctx, what: &str, entries: Vec<(&str, Value)>) -> Value {
+    let map: BTreeMap<String, Value> = entries.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+    let value = Value::Map(map);
+    if !ctx.capturing {
+        println!("{what}: {}", value.as_str());
+        println!("completed");
+    }
+    value
+}
+
+fn enough_letters(text: &str, abc: &Alphabet, min: usize, line: usize, what: &str) -> Result<(), RuntimeError> {
+    let n = letter_indices(text, abc).len();
+    if n < min {
+        return Err(RuntimeError::new(400, line, format!(
+            "{what}: only {n} letters — frequency analysis needs at least {min} to say anything"
+        )));
+    }
+    Ok(())
+}
+
+pub fn vigenere_crack(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let text = str_arg(args, 0, line, "vigenere_crack")?;
+    let abc = Alphabet::from_kwargs(kwargs, line, "vigenere_crack")?;
+    let max_len = int_arg(args, 1, kwargs, "max_key_length", 20, line, "vigenere_crack")?;
+    let max_len = usize::try_from(max_len).ok().filter(|n| *n >= 1)
+        .ok_or_else(|| RuntimeError::new(400, line, "vigenere_crack: max_key_length must be >= 1"))?;
+    enough_letters(&text, &abc, 20, line, "vigenere_crack")?;
+    let key = crack_vigenere(&text, &abc, max_len);
+    let key_text: String = key.iter().map(|&i| abc.letter(i, true)).collect();
+    let plaintext = vigenere(&text, &key, true, &abc);
+    Ok(result_map(ctx, "vigenere_crack", vec![
+        ("key", Value::Str(key_text)),
+        ("key_length", Value::Int(key.len() as i64)),
+        ("plaintext", Value::Str(plaintext)),
+    ]))
+}
+
+pub fn caesar_crack(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let text = str_arg(args, 0, line, "caesar_crack")?;
+    let abc = Alphabet::from_kwargs(kwargs, line, "caesar_crack")?;
+    enough_letters(&text, &abc, 10, line, "caesar_crack")?;
+    let shift = best_shift(&letter_indices(&text, &abc), &abc);
+    Ok(result_map(ctx, "caesar_crack", vec![
+        ("shift", Value::Int(shift as i64)),
+        ("plaintext", Value::Str(caesar(&text, -(shift as i64), &abc))),
+    ]))
+}
+
+pub fn index_of_coincidence(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let text = str_arg(args, 0, line, "index_of_coincidence")?;
+    let abc = Alphabet::from_kwargs(kwargs, line, "index_of_coincidence")?;
+    let ic = index_of_coincidence_of(&letter_indices(&text, &abc), abc.size());
+    if !ctx.capturing { println!("index_of_coincidence: {ic:.4}"); println!("completed"); }
+    Ok(Value::Float(ic))
+}
+
+pub fn letter_frequencies(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let text = str_arg(args, 0, line, "letter_frequencies")?;
+    let abc = Alphabet::from_kwargs(kwargs, line, "letter_frequencies")?;
+    let mut counts = vec![0i64; abc.size()];
+    for i in letter_indices(&text, &abc) { counts[i] += 1; }
+    let entries: Vec<(String, Value)> = counts.iter().enumerate()
+        .filter(|(_, c)| **c > 0)
+        .map(|(i, c)| (abc.letter(i, true).to_string(), Value::Int(*c)))
+        .collect();
+    let value = Value::Map(entries.into_iter().collect());
+    if !ctx.capturing { println!("letter_frequencies: {}", value.as_str()); println!("completed"); }
+    Ok(value)
 }
