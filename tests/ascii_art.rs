@@ -99,3 +99,43 @@ fn plot_draws_a_labelled_braille_line() {
     assert!(out.chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)));
     assert!(run("ascii_plot([1])").unwrap_err().contains("at least 2"));
 }
+
+#[test]
+fn tree_renders_nested_maps_and_lists() {
+    let out = s("ascii_tree({\"b\": [1, {\"x\": true}], \"a\": \"leaf\"}, root=\"cfg\")");
+    assert_eq!(out, [
+        "cfg",
+        "├── a: leaf",
+        "└── b",
+        "    ├── 1",
+        "    └── [1]",
+        "        └── x: true",
+    ].join("\n"));
+    assert!(run("ascii_tree(5)").is_err());
+}
+
+#[test]
+fn mandelbrot_is_symmetric_and_solid_inside() {
+    let out = s("ascii_mandelbrot(width=40, height=21)");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 21);
+    // Centred on the real axis, so the picture mirrors top-to-bottom.
+    for i in 0..10 {
+        assert_eq!(lines[i], lines[20 - i], "row {i} vs row {}", 20 - i);
+    }
+    assert!(lines[10].contains("@@@@@"), "the main cardioid is solid: {}", lines[10]);
+    let braille = s("ascii_mandelbrot(width=20, height=6, style=\"braille\")");
+    assert!(braille.contains('⣿'), "braille interior is fully lit");
+    assert!(run("ascii_mandelbrot(zoom=0)").is_err());
+}
+
+#[test]
+fn circles_are_round_and_symmetric() {
+    let filled = s("ascii_circle(radius=5, style=\"ascii\", fill=true)");
+    assert_eq!(filled, ["  ######", "##########", "##########", "##########", "  ######"].join("\n"));
+    let ring = s("ascii_circle(radius=8, style=\"ascii\")");
+    let rows: Vec<&str> = ring.lines().collect();
+    assert_eq!(rows.len(), 8, "radius 8 at 2:1 character aspect → 8 rows");
+    assert_eq!(rows.first(), rows.last(), "top and bottom match");
+    assert!(s("ascii_circle(radius=4)").chars().any(|c| ('\u{2801}'..='\u{28ff}').contains(&c)));
+}

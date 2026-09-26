@@ -283,3 +283,134 @@ pub fn ascii_plot(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Re
     out.push(format!("{} └{}", " ".repeat(label_w), "─".repeat(width)));
     Ok(emit_art(ctx, out.join("\n")))
 }
+
+// ---------------- trees, fractals, shapes ----------------
+
+fn tree_lines(value: &Value, prefix: &str, out: &mut Vec<String>) {
+    let children: Vec<(String, &Value)> = match value {
+        Value::Map(m) => m.iter().map(|(k, v)| (k.clone(), v)).collect(),
+        Value::List(items) => items.iter().enumerate().map(|(i, v)| (format!("[{i}]"), v)).collect(),
+        _ => return,
+    };
+    let list_parent = matches!(value, Value::List(_));
+    for (i, (label, child)) in children.iter().enumerate() {
+        let last = i + 1 == children.len();
+        let (branch, next) = if last { ("└── ", "    ") } else { ("├── ", "│   ") };
+        let text = match child {
+            Value::Map(_) | Value::List(_) => label.clone(),
+            scalar if list_parent => scalar.as_str(),
+            scalar => format!("{label}: {}", scalar.as_str()),
+        };
+        out.push(format!("{prefix}{branch}{text}"));
+        tree_lines(child, &format!("{prefix}{next}"), out);
+    }
+}
+
+pub fn ascii_tree(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let what = "ascii_tree";
+    let value = args.first().ok_or_else(|| RuntimeError::new(400, line, format!("{what} requires a map or list")))?;
+    if !matches!(value, Value::Map(_) | Value::List(_)) {
+        return Err(RuntimeError::new(400, line, format!("{what}: expected a map or list, got {}", value.as_str())));
+    }
+    let mut out = vec![kw_str(kwargs, "root").unwrap_or_else(|| ".".into())];
+    tree_lines(value, "", &mut out);
+    Ok(emit_art(ctx, out.join("\n")))
+}
+
+fn render_style(style: &str, line: usize, what: &str) -> Result<Render, RuntimeError> {
+    match style {
+        "ascii" => Ok(Render::Ramp(crate::stdlib::canvas::RAMP_ASCII)),
+        "shade" => Ok(Render::Ramp(crate::stdlib::canvas::RAMP_SHADE)),
+        "braille" => Ok(Render::Braille),
+        "half" => Ok(Render::HalfBlocks),
+        other => Err(RuntimeError::new(400, line, format!("{what}: style must be ascii, shade, braille or half; got \"{other}\""))),
+    }
+}
+
+fn float_kw(kwargs: &Kwargs, key: &str, default: f64, line: usize, what: &str) -> Result<f64, RuntimeError> {
+    match kwargs.get(key).and_then(|v| v.first()) {
+        None => Ok(default),
+        Some(v) => v.as_f64().filter(|f| f.is_finite())
+            .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: `{key}` must be a number"))),
+    }
+}
+
+/// Escape-time Mandelbrot with smooth (fractional) iteration counts. 1-bit styles (braille,
+/// half) are Floyd–Steinberg dithered so the glow around the set still shows.
+pub fn ascii_mandelbrot(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let what = "ascii_mandelbrot";
+    let width = width_arg(args, 0, kwargs, "width", 78, line, what)?;
+    let height = width_arg(args, 1, kwargs, "height", 30, line, what)?;
+    let max_iter = int_arg(args, 2, kwargs, "iterations", 80, line, what)?;
+    let max_iter = u32::try_from(max_iter).ok().filter(|n| (1..=10_000).contains(n))
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: iterations must be 1..=10000")))?;
+    let mode = render_style(&kw_str(kwargs, "style").unwrap_or_else(|| "ascii".into()), line, what)?;
+    let (cx, cy) = (float_kw(kwargs, "x", -0.5, line, what)?, float_kw(kwargs, "y", 0.0, line, what)?);
+    let zoom = float_kw(kwargs, "zoom", 1.0, line, what)?;
+    if zoom <= 0.0 { return Err(RuntimeError::new(400, line, format!("{what}: zoom must be > 0"))); }
+
+    let one_bit = matches!(mode, Render::Braille | Render::HalfBlocks);
+    let (cell_w, cell_h) = mode.cell();
+    let (pw, ph) = (width * cell_w, height * cell_h);
+    let step_x = 3.2 / zoom / pw as f64;
+    let step_y = step_x * mode.pixel_aspect();
+    let mut canvas = Canvas::new(pw, ph);
+    for py in 0..ph {
+        for px in 0..pw {
+            // Pixel centres, so the image is exactly symmetric about (x, y).
+            let c_re = cx + (px as f64 + 0.5 - pw as f64 / 2.0) * step_x;
+            let c_im = cy + (py as f64 + 0.5 - ph as f64 / 2.0) * step_y;
+            let (mut zr, mut zi, mut n) = (0.0f64, 0.0f64, 0u32);
+            while n < max_iter && zr * zr + zi * zi <= 256.0 {
+                (zr, zi) = (zr * zr - zi * zi + c_re, 2.0 * zr * zi + c_im);
+                n += 1;
+            }
+            let v = if n == max_iter {
+                1.0
+            } else {
+                let smooth = f64::from(n) + 1.0 - (zr * zr + zi * zi).ln().ln() / std::f64::consts::LN_2;
+                let t = (smooth.max(0.0) / f64::from(max_iter)).sqrt();
+                // 1-bit renderers: drop the faint far-field glow, which dithering would otherwise
+                // scatter as noise across the whole picture, and stretch what's left.
+                if one_bit { ((t - 0.3) / 0.7).max(0.0) } else { t }
+            };
+            canvas.set(px as i64, py as i64, v as f32);
+        }
+    }
+    if one_bit { canvas.dither(); }
+    Ok(emit_art(ctx, canvas.render(mode)))
+}
+
+/// A circle that looks round: radii are corrected for the renderer's pixel aspect ratio.
+pub fn ascii_circle(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let what = "ascii_circle";
+    let r = width_arg(args, 0, kwargs, "radius", 8, line, what)? as f64;
+    let fill = kw_bool(kwargs, "fill");
+    let style = kw_str(kwargs, "style").unwrap_or_else(|| "braille".into());
+    let mode = match style.as_str() {
+        "ascii" => Render::Blocks { fill: kw_str(kwargs, "char").and_then(|c| c.chars().next()).unwrap_or('#'), half: '#', width: 1 },
+        other => render_style(other, line, what)?,
+    };
+    // Sample at pixel centres, as a rasterizer does: pixel (x, y) covers [x, x+1) × [y, y+1).
+    let (rx, ry) = (r, r / mode.pixel_aspect());
+    let (w, h) = ((2.0 * rx).ceil().max(1.0) as usize, (2.0 * ry).ceil().max(1.0) as usize);
+    let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+    let mut canvas = Canvas::new(w, h);
+    if fill {
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = ((x as f64 + 0.5 - cx) / rx, (y as f64 + 0.5 - cy) / ry);
+                if dx * dx + dy * dy <= 1.0 { canvas.set(x as i64, y as i64, 1.0); }
+            }
+        }
+    } else {
+        let steps = ((rx.max(ry) * 32.0).ceil() as usize).max(64);
+        for i in 0..steps {
+            let t = i as f64 / steps as f64 * std::f64::consts::TAU;
+            let x = ((cx + (rx - 0.5) * t.cos()).floor() as i64).clamp(0, w as i64 - 1);
+            let y = ((cy + (ry - 0.5) * t.sin()).floor() as i64).clamp(0, h as i64 - 1);
+            canvas.set(x, y, 1.0);
+        }
+    }
+    Ok(emit_art(ctx, canvas.render(mode)))
+}
