@@ -6,6 +6,7 @@ pub mod cipher;
 pub mod collections;
 pub mod drivers;
 pub mod encoding;
+pub mod enigma;
 pub mod hash;
 pub mod http;
 pub mod io;
@@ -89,6 +90,7 @@ const KNOWN: &[&str] = &[
     "columnar_encrypt", "columnar_decrypt", "polybius_encrypt", "polybius_decrypt",
     "bifid_encrypt", "bifid_decrypt", "adfgvx_encrypt", "adfgvx_decrypt",
     "bacon_encrypt", "bacon_decrypt", "morse_encode", "morse_decode",
+    "enigma",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -399,6 +401,7 @@ pub fn dispatch(
         "bacon_decrypt"      => cipher::bacon_decrypt(positional, kwargs, line, ctx),
         "morse_encode"       => cipher::morse_encode(positional, kwargs, line, ctx),
         "morse_decode"       => cipher::morse_decode(positional, kwargs, line, ctx),
+        "enigma"             => enigma::enigma(positional, kwargs, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }
