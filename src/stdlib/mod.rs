@@ -85,6 +85,10 @@ const KNOWN: &[&str] = &[
     "caesar_encrypt", "caesar_decrypt", "rot13", "rot47", "atbash",
     "affine_encrypt", "affine_decrypt", "vigenere_encrypt", "vigenere_decrypt",
     "beaufort", "autokey_encrypt", "autokey_decrypt",
+    "playfair_encrypt", "playfair_decrypt", "rail_fence_encrypt", "rail_fence_decrypt",
+    "columnar_encrypt", "columnar_decrypt", "polybius_encrypt", "polybius_decrypt",
+    "bifid_encrypt", "bifid_decrypt", "adfgvx_encrypt", "adfgvx_decrypt",
+    "bacon_encrypt", "bacon_decrypt", "morse_encode", "morse_decode",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -379,6 +383,22 @@ pub fn dispatch(
         "beaufort"         => cipher::beaufort_cmd(positional, kwargs, line, ctx),
         "autokey_encrypt"  => cipher::autokey_encrypt(positional, kwargs, line, ctx),
         "autokey_decrypt"  => cipher::autokey_decrypt(positional, kwargs, line, ctx),
+        "playfair_encrypt"   => cipher::playfair_encrypt(positional, kwargs, line, ctx),
+        "playfair_decrypt"   => cipher::playfair_decrypt(positional, kwargs, line, ctx),
+        "rail_fence_encrypt" => cipher::rail_fence_encrypt(positional, kwargs, line, ctx),
+        "rail_fence_decrypt" => cipher::rail_fence_decrypt(positional, kwargs, line, ctx),
+        "columnar_encrypt"   => cipher::columnar_encrypt(positional, kwargs, line, ctx),
+        "columnar_decrypt"   => cipher::columnar_decrypt(positional, kwargs, line, ctx),
+        "polybius_encrypt"   => cipher::polybius_encrypt(positional, kwargs, line, ctx),
+        "polybius_decrypt"   => cipher::polybius_decrypt(positional, kwargs, line, ctx),
+        "bifid_encrypt"      => cipher::bifid_encrypt(positional, kwargs, line, ctx),
+        "bifid_decrypt"      => cipher::bifid_decrypt(positional, kwargs, line, ctx),
+        "adfgvx_encrypt"     => cipher::adfgvx_encrypt(positional, kwargs, line, ctx),
+        "adfgvx_decrypt"     => cipher::adfgvx_decrypt(positional, kwargs, line, ctx),
+        "bacon_encrypt"      => cipher::bacon_encrypt(positional, kwargs, line, ctx),
+        "bacon_decrypt"      => cipher::bacon_decrypt(positional, kwargs, line, ctx),
+        "morse_encode"       => cipher::morse_encode(positional, kwargs, line, ctx),
+        "morse_decode"       => cipher::morse_decode(positional, kwargs, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }

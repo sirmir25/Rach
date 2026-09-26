@@ -78,3 +78,52 @@ fn round_trips() {
         assert_eq!(s(&dec_expr), text, "{enc} -> {dec}");
     }
 }
+
+#[test]
+fn playfair_wheatstone_1854() {
+    assert_eq!(s("playfair_encrypt(\"Hide the gold in the tree stump\", \"playfair example\")"), "BMODZBXDNABEKUDMUIXMMOUVIF");
+    // The filler X between the doubled E's of "tree" can't be told apart from a real X.
+    assert_eq!(s("playfair_decrypt(\"BMODZBXDNABEKUDMUIXMMOUVIF\", \"playfair example\")"), "HIDETHEGOLDINTHETREXESTUMP");
+    assert!(run("playfair_decrypt(\"ABC\", \"k\")").unwrap_err().contains("even"));
+}
+
+#[test]
+fn transposition_ciphers() {
+    assert_eq!(s("rail_fence_encrypt(\"WEAREDISCOVEREDFLEEATONCE\", 3)"), "WECRLTEERDSOEEFEAOCAIVDEN");
+    assert_eq!(s("rail_fence_decrypt(\"WECRLTEERDSOEEFEAOCAIVDEN\", 3)"), "WEAREDISCOVEREDFLEEATONCE");
+    for rails in 1..=9 {
+        assert_eq!(s(&format!("rail_fence_decrypt(rail_fence_encrypt(\"Ada, 1843!\", {rails}), {rails})")), "Ada, 1843!");
+    }
+    assert_eq!(s("columnar_encrypt(\"WEAREDISCOVEREDFLEEATONCE\", \"ZEBRAS\")"), "EVLNACDTESEAROFODEECWIREE");
+    assert_eq!(s("columnar_decrypt(\"EVLNACDTESEAROFODEECWIREE\", \"ZEBRAS\")"), "WEAREDISCOVEREDFLEEATONCE");
+    assert_eq!(s("columnar_decrypt(columnar_encrypt(\"short\", \"LONGERKEY\"), \"LONGERKEY\")"), "short");
+}
+
+#[test]
+fn polybius_bifid_adfgvx() {
+    assert_eq!(s("polybius_encrypt(\"Hello world\")"), "23 15 31 31 34 / 52 34 42 31 14");
+    assert_eq!(s("polybius_decrypt(\"23 15 31 31 34 / 52 34 42 31 14\")"), "HELLO WORLD");
+    assert_eq!(s("polybius_decrypt(polybius_encrypt(\"secret\", \"KEYWORD\"), \"KEYWORD\")"), "SECRET");
+    assert!(run("polybius_decrypt(\"66\")").is_err());
+
+    assert_eq!(s("bifid_encrypt(\"FLEEATONCE\", \"BGWKZQPNDSIOAXEFCLUMTHYVR\")"), "UAEOLWRINS");
+    assert_eq!(s("bifid_decrypt(\"UAEOLWRINS\", \"BGWKZQPNDSIOAXEFCLUMTHYVR\")"), "FLEEATONCE");
+
+    assert_eq!(s("adfgvx_encrypt(\"attack at 1200am\", \"NA1C3H8TB2OME5WRPD4F6G7I9J0KLQSUVXYZ\", \"PRIVACY\")"), "DGDDDAGDDGAFADDFDADVDVFAADVX");
+    assert_eq!(s("adfgvx_decrypt(\"DGDD DAGD DGAF ADDF DADV DVFA ADVX\", \"NA1C3H8TB2OME5WRPD4F6G7I9J0KLQSUVXYZ\", \"PRIVACY\")"), "attackat1200am");
+}
+
+#[test]
+fn bacon_and_morse() {
+    assert_eq!(s("bacon_encrypt(\"Hi\")"), "AABBB ABAAA");
+    assert_eq!(s("bacon_decrypt(\"aabbb abaaa\")"), "HI");
+    assert!(run("bacon_decrypt(\"AAB\")").is_err());
+
+    assert_eq!(s("morse_encode(\"SOS\")"), "... --- ...");
+    assert_eq!(s("morse_encode(\"Hello World\")"), ".... . .-.. .-.. --- / .-- --- .-. .-.. -..");
+    assert_eq!(s("morse_decode(\".... . .-.. .-.. --- / .-- --- .-. .-.. -..\")"), "HELLO WORLD");
+    assert_eq!(s("morse_decode(\"··· −−− ···\")"), "SOS", "typographic dots and dashes are accepted");
+    assert_eq!(s("morse_encode(\"Привет мир\", alphabet=\"ru\")"), ".--. .-. .. .-- . - / -- .. .-.");
+    assert_eq!(s("morse_decode(\".--. .-. .. .-- . - / -- .. .-.\", alphabet=\"ru\")"), "ПРИВЕТ МИР");
+    assert!(run("morse_encode(\"Ж\")").unwrap_err().contains("no Morse code"));
+}
