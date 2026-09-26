@@ -1,4 +1,4 @@
-//! JSON parse / stringify via serde_json (already a dependency).
+//! JSON parse / stringify via `serde_json` (already a dependency).
 
 use std::collections::BTreeMap;
 
@@ -9,14 +9,14 @@ use crate::interpreter::{Ctx, RuntimeError};
 
 fn first(args: &[Value], line: usize, what: &str) -> Result<String, RuntimeError> {
     args.first()
-        .map(|v| v.as_str())
-        .ok_or_else(|| RuntimeError::new(400, line, format!("{} requires text argument", what)))
+        .map(Value::as_str)
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what} requires text argument")))
 }
 
 pub fn json_parse(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let raw = first(args, line, "json_parse")?;
     let parsed: JsonValue = serde_json::from_str(&raw)
-        .map_err(|e| RuntimeError::new(400, line, format!("json_parse: {}", e)))?;
+        .map_err(|e| RuntimeError::new(400, line, format!("json_parse: {e}")))?;
     let value = json_to_value(&parsed);
     if !ctx.capturing {
         println!("json_parse: {}", value.as_str());
@@ -28,17 +28,17 @@ pub fn json_parse(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, Runti
 pub fn json_stringify(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let v = args.first()
         .ok_or_else(|| RuntimeError::new(400, line, "json_stringify requires a value"))?;
-    let pretty = args.get(1).map(|v| v.is_truthy()).unwrap_or(false);
+    let pretty = args.get(1).is_some_and(Value::is_truthy);
     let json = value_to_json(v);
     let s = if pretty {
         serde_json::to_string_pretty(&json)
-            .map_err(|e| RuntimeError::new(500, line, format!("json_stringify: {}", e)))?
+            .map_err(|e| RuntimeError::new(500, line, format!("json_stringify: {e}")))?
     } else {
         serde_json::to_string(&json)
-            .map_err(|e| RuntimeError::new(500, line, format!("json_stringify: {}", e)))?
+            .map_err(|e| RuntimeError::new(500, line, format!("json_stringify: {e}")))?
     };
     if !ctx.capturing {
-        println!("{}", s);
+        println!("{s}");
         println!("completed");
     }
     Ok(Value::Str(s))
@@ -56,7 +56,7 @@ fn json_to_value(j: &JsonValue) -> Value {
         JsonValue::Array(items) => Value::List(items.iter().map(json_to_value).collect()),
         JsonValue::Object(obj) => {
             let mut map = BTreeMap::new();
-            for (k, v) in obj.iter() {
+            for (k, v) in obj {
                 map.insert(k.clone(), json_to_value(v));
             }
             Value::Map(map)

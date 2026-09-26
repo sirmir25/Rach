@@ -19,6 +19,6 @@ pub fn input(args: &[Value], _line: usize, _ctx: &Ctx) -> Result<Value, RuntimeE
             let trimmed = line.trim_end_matches(&['\r', '\n'][..]).to_string();
             Ok(Value::Str(trimmed))
         }
-        Err(e) => Err(RuntimeError::new(500, 0, format!("input: {}", e))),
+        Err(e) => Err(RuntimeError::new(500, 0, format!("input: {e}"))),
     }
 }

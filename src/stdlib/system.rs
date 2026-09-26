@@ -7,19 +7,19 @@ use crate::interpreter::{Ctx, RuntimeError};
 
 fn first_str(args: &[Value], line: usize, what: &str) -> Result<String, RuntimeError> {
     args.first()
-        .map(|v| v.as_str())
-        .ok_or_else(|| RuntimeError::new(400, line, format!("{} requires an argument", what)))
+        .map(Value::as_str)
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what} requires an argument")))
 }
 
 fn nth_str(args: &[Value], n: usize, line: usize, what: &str) -> Result<String, RuntimeError> {
     args.get(n)
-        .map(|v| v.as_str())
+        .map(Value::as_str)
         .ok_or_else(|| RuntimeError::new(400, line, format!("{} requires arg #{}", what, n + 1)))
 }
 
 pub fn run_command(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let cmd = first_str(args, line, "run_command")?;
-    println!("$ {}", cmd);
+    println!("$ {cmd}");
     let (program, shell_arg) = if cfg!(target_os = "windows") {
         ("cmd", "/C")
     } else {
@@ -30,7 +30,7 @@ pub fn run_command(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
         Ok(o) => {
             let stdout_str = String::from_utf8_lossy(&o.stdout).to_string();
             if !o.stdout.is_empty() {
-                print!("{}", stdout_str);
+                print!("{stdout_str}");
             }
             if !o.stderr.is_empty() {
                 eprint!("{}", String::from_utf8_lossy(&o.stderr));
@@ -39,11 +39,11 @@ pub fn run_command(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
                 println!("completed");
                 Ok(Value::Str(stdout_str))
             } else {
-                let code = o.status.code().unwrap_or(1) as i64;
-                Err(RuntimeError::new(400 + code, line, format!("run_command exited with {}", code)))
+                let code = i64::from(o.status.code().unwrap_or(1));
+                Err(RuntimeError::new(400 + code, line, format!("run_command exited with {code}")))
             }
         }
-        Err(e) => Err(RuntimeError::new(500, line, format!("run_command failed: {}", e))),
+        Err(e) => Err(RuntimeError::new(500, line, format!("run_command failed: {e}"))),
     }
 }
 
@@ -58,23 +58,23 @@ pub fn install_package(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Val
                 if which::which_path(c).is_some() { chosen = Some(c); break; }
             }
             match chosen {
-                Some("apt-get") | Some("apt") => ("sudo", vec!["apt-get".into(), "install".into(), "-y".into(), pkg.clone()]),
+                Some("apt-get" | "apt") => ("sudo", vec!["apt-get".into(), "install".into(), "-y".into(), pkg.clone()]),
                 Some("dnf") => ("sudo", vec!["dnf".into(), "install".into(), "-y".into(), pkg.clone()]),
                 Some("yum") => ("sudo", vec!["yum".into(), "install".into(), "-y".into(), pkg.clone()]),
                 Some("pacman") => ("sudo", vec!["pacman".into(), "-S".into(), "--noconfirm".into(), pkg.clone()]),
                 Some("zypper") => ("sudo", vec!["zypper".into(), "install".into(), "-y".into(), pkg.clone()]),
                 Some("apk") => ("sudo", vec!["apk".into(), "add".into(), pkg.clone()]),
-                _ => { eprintln!("error 404 string {}  // no package manager found", line); return Ok(Value::Nil); }
+                _ => { eprintln!("error 404 string {line}  // no package manager found"); return Ok(Value::Nil); }
             }
         }
         "windows" => ("winget", vec!["install".into(), "--silent".into(), pkg.clone()]),
         "bsd" => ("pkg", vec!["install".into(), "-y".into(), pkg.clone()]),
-        _ => { eprintln!("error 501 string {}  // unsupported OS for install_package", line); return Ok(Value::Nil); }
+        _ => { eprintln!("error 501 string {line}  // unsupported OS for install_package"); return Ok(Value::Nil); }
     };
 
     println!("$ {} {}", program, install_args.join(" "));
 
-    let dry_run = std::env::var("RACH_DRY_RUN").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+    let dry_run = std::env::var("RACH_DRY_RUN").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     if dry_run {
         println!("// RACH_DRY_RUN=1 — skipped execution");
         println!("completed");
@@ -87,12 +87,12 @@ pub fn install_package(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Val
     match result {
         Ok(s) if s.success() => { println!("completed"); Ok(Value::Bool(true)) }
         Ok(s) => {
-            let code = s.code().unwrap_or(1) as i64;
+            let code = i64::from(s.code().unwrap_or(1));
             eprintln!("error {} string {}  // install_package exited with {}", 400 + code, line, code);
             Ok(Value::Bool(false))
         }
         Err(e) => {
-            eprintln!("error 500 string {}  // install_package: {}", line, e);
+            eprintln!("error 500 string {line}  // install_package: {e}");
             Ok(Value::Bool(false))
         }
     }
@@ -102,8 +102,8 @@ pub fn create_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let path = nth_str(args, 0, line, "create_file")?;
     let content = nth_str(args, 1, line, "create_file").unwrap_or_default();
     match fs::write(&path, content.as_bytes()) {
-        Ok(_) => { println!("created: {}", path); println!("completed"); Ok(Value::Str(path)) }
-        Err(e) => Err(RuntimeError::new(500, line, format!("create_file({}): {}", path, e))),
+        Ok(()) => { println!("created: {path}"); println!("completed"); Ok(Value::Str(path)) }
+        Err(e) => Err(RuntimeError::new(500, line, format!("create_file({path}): {e}"))),
     }
 }
 
@@ -112,13 +112,13 @@ pub fn read_file(args: &[Value], line: usize, capturing: bool) -> Result<Value, 
     match fs::read_to_string(&path) {
         Ok(s) => {
             if !capturing {
-                print!("{}", s);
+                print!("{s}");
                 if !s.ends_with('\n') { println!(); }
                 println!("completed");
             }
             Ok(Value::Str(s))
         }
-        Err(e) => Err(RuntimeError::new(404, line, format!("read_file({}): {}", path, e))),
+        Err(e) => Err(RuntimeError::new(404, line, format!("read_file({path}): {e}"))),
     }
 }
 
@@ -126,16 +126,16 @@ pub fn edit_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let path = nth_str(args, 0, line, "edit_file")?;
     let content = nth_str(args, 1, line, "edit_file")?;
     match fs::write(&path, content.as_bytes()) {
-        Ok(_) => { println!("edited: {}", path); println!("completed"); Ok(Value::Str(path)) }
-        Err(e) => Err(RuntimeError::new(500, line, format!("edit_file({}): {}", path, e))),
+        Ok(()) => { println!("edited: {path}"); println!("completed"); Ok(Value::Str(path)) }
+        Err(e) => Err(RuntimeError::new(500, line, format!("edit_file({path}): {e}"))),
     }
 }
 
 pub fn delete_file(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
     let path = first_str(args, line, "delete_file")?;
     match fs::remove_file(&path) {
-        Ok(_) => { println!("deleted: {}", path); println!("completed"); Ok(Value::Bool(true)) }
-        Err(e) => Err(RuntimeError::new(404, line, format!("delete_file({}): {}", path, e))),
+        Ok(()) => { println!("deleted: {path}"); println!("completed"); Ok(Value::Bool(true)) }
+        Err(e) => Err(RuntimeError::new(404, line, format!("delete_file({path}): {e}"))),
     }
 }
 
@@ -152,14 +152,14 @@ pub fn check_if_exists(args: &[Value], line: usize, capturing: bool) -> Result<V
 
 pub fn reboot(line: usize) -> Result<Value, RuntimeError> {
     eprintln!("warn: reboot() is a destructive action; interpreter only prints intent");
-    println!("would reboot system [line {}]", line);
+    println!("would reboot system [line {line}]");
     println!("completed");
     Ok(Value::Nil)
 }
 
 pub fn shutdown(line: usize) -> Result<Value, RuntimeError> {
     eprintln!("warn: shutdown() is a destructive action; interpreter only prints intent");
-    println!("would shut down system [line {}]", line);
+    println!("would shut down system [line {line}]");
     println!("completed");
     Ok(Value::Nil)
 }

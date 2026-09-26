@@ -26,6 +26,7 @@ const SECS_PER_DAY: u64 = SECS_PER_HOUR * 24;
 pub enum LogLevel { Debug = 0, Info = 1, Warn = 2, Error = 3, Off = 4 }
 
 impl LogLevel {
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "debug" | "trace" => Some(LogLevel::Debug),
@@ -37,6 +38,7 @@ impl LogLevel {
         }
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             LogLevel::Debug => "DEBUG",
@@ -47,6 +49,7 @@ impl LogLevel {
         }
     }
 
+    #[must_use]
     pub fn ansi(self) -> &'static str {
         match self {
             LogLevel::Debug => "\x1b[2m",
@@ -86,7 +89,7 @@ impl Default for LogState {
 }
 
 fn now_unix_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 fn format_clock(unix_secs: u64) -> String {
@@ -94,7 +97,7 @@ fn format_clock(unix_secs: u64) -> String {
     let h = s / SECS_PER_HOUR;
     let m = (s % SECS_PER_HOUR) / SECS_PER_MIN;
     let s = s % SECS_PER_MIN;
-    format!("{:02}:{:02}:{:02}", h, m, s)
+    format!("{h:02}:{m:02}:{s:02}")
 }
 
 fn format_entry(entry: &LogEntry, with_color: bool) -> String {
@@ -108,17 +111,17 @@ fn format_entry(entry: &LogEntry, with_color: bool) -> String {
 
 fn first_str(args: &[Value], line: usize, what: &str) -> Result<String, RuntimeError> {
     args.first()
-        .map(|v| v.as_str())
-        .ok_or_else(|| RuntimeError::new(400, line, format!("{} requires text argument", what)))
+        .map(Value::as_str)
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what} requires text argument")))
 }
 
 fn parse_level(s: &str, line: usize) -> Result<LogLevel, RuntimeError> {
-    LogLevel::parse(s).ok_or_else(|| RuntimeError::new(400, line, format!("unknown log level `{}`", s)))
+    LogLevel::parse(s).ok_or_else(|| RuntimeError::new(400, line, format!("unknown log level `{s}`")))
 }
 
 fn append_to_file(path: &PathBuf, line: &str) {
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{}", line);
+        let _ = writeln!(f, "{line}");
     }
 }
 
@@ -148,24 +151,24 @@ pub fn log(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeE
         return Err(RuntimeError::new(400, line, "log(level, message) requires two arguments"));
     }
     let level = parse_level(&args[0].as_str(), line)?;
-    let message = args[1..].iter().map(|v| v.as_str()).collect::<Vec<_>>().join(" ");
+    let message = args[1..].iter().map(Value::as_str).collect::<Vec<_>>().join(" ");
     Ok(emit(ctx, level, message))
 }
 
 pub fn log_debug(args: &[Value], _line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
-    let message = args.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(" ");
+    let message = args.iter().map(Value::as_str).collect::<Vec<_>>().join(" ");
     Ok(emit(ctx, LogLevel::Debug, message))
 }
 pub fn log_info(args: &[Value], _line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
-    let message = args.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(" ");
+    let message = args.iter().map(Value::as_str).collect::<Vec<_>>().join(" ");
     Ok(emit(ctx, LogLevel::Info, message))
 }
 pub fn log_warn(args: &[Value], _line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
-    let message = args.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(" ");
+    let message = args.iter().map(Value::as_str).collect::<Vec<_>>().join(" ");
     Ok(emit(ctx, LogLevel::Warn, message))
 }
 pub fn log_error(args: &[Value], _line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {
-    let message = args.iter().map(|v| v.as_str()).collect::<Vec<_>>().join(" ");
+    let message = args.iter().map(Value::as_str).collect::<Vec<_>>().join(" ");
     Ok(emit(ctx, LogLevel::Error, message))
 }
 
@@ -173,7 +176,7 @@ pub fn log_level(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Value, Ru
     if args.is_empty() {
         let label = ctx.log.level.label().trim().to_string();
         if !ctx.capturing {
-            println!("log_level: {}", label);
+            println!("log_level: {label}");
             println!("completed");
         }
         return Ok(Value::Str(label));
@@ -196,7 +199,7 @@ pub fn log_to(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Value, Runti
     let path = first_str(args, line, "log_to")?;
     ctx.log.file = Some(PathBuf::from(&path));
     if !ctx.capturing {
-        println!("log file: {}", path);
+        println!("log file: {path}");
         println!("completed");
     }
     Ok(Value::Str(path))
@@ -238,7 +241,7 @@ pub fn log_count(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, Runtim
         ctx.log.buffer.iter().filter(|e| e.level == level).count() as i64
     };
     if !ctx.capturing {
-        println!("log_count: {}", count);
+        println!("log_count: {count}");
         println!("completed");
     }
     Ok(Value::Int(count))
@@ -248,7 +251,7 @@ pub fn log_clear(_args: &[Value], _line: usize, ctx: &mut Ctx) -> Result<Value, 
     let cleared = ctx.log.buffer.len() as i64;
     ctx.log.buffer.clear();
     if !ctx.capturing {
-        println!("log_clear: removed {} entries", cleared);
+        println!("log_clear: removed {cleared} entries");
         println!("completed");
     }
     Ok(Value::Int(cleared))

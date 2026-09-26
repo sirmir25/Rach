@@ -70,9 +70,12 @@ pub struct Token {
     pub col: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("lex error at {line}:{col}: {message}")]
 pub struct LexError {
     pub line: usize,
+    /// 1-based column, or 0 when unknown.
+    pub col: usize,
     pub message: String,
 }
 
@@ -247,7 +250,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
                         i += 1;
                     }
                     if i >= chars.len() {
-                        return Err(LexError { line: start_line, message: "unterminated `{...}` in f-string".into() });
+                        return Err(LexError { line: start_line, col: start_col, message: "unterminated `{...}` in f-string".into() });
                     }
                     i += 1; // consume `}`
                     col += 1;
@@ -264,7 +267,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
                 i += 1;
             }
             if i >= chars.len() {
-                return Err(LexError { line: start_line, message: "unterminated string".into() });
+                return Err(LexError { line: start_line, col: start_col, message: "unterminated string".into() });
             }
             i += 1;
             col += 1;
@@ -294,10 +297,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
             }
             let lit: String = chars[start..i].iter().collect();
             if is_float {
-                let f: f64 = lit.parse().map_err(|_| LexError { line, message: format!("bad float {}", lit) })?;
+                let f: f64 = lit.parse().map_err(|_| LexError { line, col: start_col, message: format!("bad float {lit}") })?;
                 tokens.push(Token { tok: Tok::Float(f), line, col: start_col });
             } else {
-                let n: i64 = lit.parse().map_err(|_| LexError { line, message: format!("bad number {}", lit) })?;
+                let n: i64 = lit.parse().map_err(|_| LexError { line, col: start_col, message: format!("bad number {lit}") })?;
                 tokens.push(Token { tok: Tok::Int(n), line, col: start_col });
             }
             continue;
@@ -315,7 +318,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
             continue;
         }
 
-        return Err(LexError { line, message: format!("unexpected character '{}'", c) });
+        return Err(LexError { line, col: tok_col, message: format!("unexpected character '{c}'") });
     }
 
     tokens.push(Token { tok: Tok::Newline, line, col });

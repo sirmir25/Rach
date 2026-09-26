@@ -11,8 +11,8 @@ const HTTP_OK_HIGH: i64 = 299;
 
 fn first_str(args: &[Value], line: usize, what: &str) -> Result<String, RuntimeError> {
     args.first()
-        .map(|v| v.as_str())
-        .ok_or_else(|| RuntimeError::new(400, line, format!("{} requires url", what)))
+        .map(Value::as_str)
+        .ok_or_else(|| RuntimeError::new(400, line, format!("{what} requires url")))
 }
 
 fn run_curl(args: &[&str], line: usize) -> Result<(i64, String), RuntimeError> {
@@ -22,7 +22,7 @@ fn run_curl(args: &[&str], line: usize) -> Result<(i64, String), RuntimeError> {
         .arg("--max-time").arg("60")
         .arg("-w").arg("\n%{http_code}")
         .output()
-        .map_err(|e| RuntimeError::new(502, line, format!("spawn curl: {}", e)))?;
+        .map_err(|e| RuntimeError::new(502, line, format!("spawn curl: {e}")))?;
     if !output.status.success() {
         return Err(RuntimeError::new(502, line,
             format!("curl exit {:?}: {}", output.status.code(), String::from_utf8_lossy(&output.stderr))));
@@ -60,12 +60,11 @@ pub fn http_get(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, Runtime
 
 pub fn http_post(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
     let url = first_str(args, line, "http_post")?;
-    let body = args.get(1).map(|v| v.as_str()).unwrap_or_default();
-    let content_type = args.get(2).map(|v| v.as_str())
-        .unwrap_or_else(|| "application/json".to_string());
+    let body = args.get(1).map(Value::as_str).unwrap_or_default();
+    let content_type = args.get(2).map_or_else(|| "application/json".to_string(), Value::as_str);
 
     let (status, response_body) = run_curl(
-        &["-X", "POST", &url, "-d", &body, "-H", &format!("Content-Type: {}", content_type)],
+        &["-X", "POST", &url, "-d", &body, "-H", &format!("Content-Type: {content_type}")],
         line,
     )?;
     let result = build_response(status, response_body);

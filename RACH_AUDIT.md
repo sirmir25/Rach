@@ -136,21 +136,90 @@ Branch: `harden/parser-robustness`.
 - Examples: DuckDuckGo search field is now `name="q"`; `login.rach` opens `/login`.
 - Build warnings 3 → 0.
 
+### Done on `feat/diagnostics`
+
+- **P1 span diagnostics** — `LexError`/`ParseError` carry `col`; `report_pretty` prints
+  `file:line:col` and a `^` caret (tab-aware). Tests: `tests/diagnostics.rs`.
+- **Clippy (default lints)** — clean under `-D warnings`; dead `resolve_call` removed.
+- **CI** — `.github/workflows/ci.yml`: build/test/clippy on Linux/macOS/Windows, plus the
+  offline examples under `RACH_STRICT=1`. `cargo fmt --check` is deliberately not gated
+  (the codebase uses a compact one-line style that rustfmt would rewrite wholesale).
+
+### Done on `feat/diagnostics` (continued — network available, deps added)
+
+- **`thiserror` for error types** (P1-c) — `LexError`/`ParseError`/`RuntimeError` derive
+  `thiserror::Error` (`#[error("... at {line}:{col}: {message}")]` /
+  `#[error("runtime error {code} at line {line}: {message}")]`); they're now real
+  `std::error::Error` types usable with `?` and trait objects by anyone embedding `rach` as a
+  library, on top of the hand-rolled `report_pretty` rendering (unaffected — it doesn't use
+  `Display`).
+- **`insta` snapshot tests** (Phase 4) — `render_pretty` (the formatting half of
+  `report_pretty`, split out so it returns a `String` instead of only `eprintln!`-ing) is
+  snapshot-tested in `tests/diagnostics_snapshot.rs`: a lex error with a caret, a multi-line
+  parse error, and a line-less runtime error. Locks the exact rustc-style rendering — header,
+  source window, caret column — against silent drift.
+- **`criterion` benches** (Phase 6) — `benches/pipeline.rs` (`cargo bench`): lex+parse
+  throughput on a small script, `fib(18)` (recursive user-function call overhead), and a
+  `struct`/`impl`-method loop (method dispatch + `self`-mutation write-back cost). Not wired
+  into CI (benches are slow and noisy on shared runners); run locally when tuning hot paths.
+- **OOP: structs + methods** — `impl StructName: rach method(self, ...): ... end` attaches
+  methods to a `struct`. First param must be named `self`; the interpreter binds the receiver
+  to it and, after the call, writes any `self.field = ...` mutation back to the call site when
+  it's an assignable place (a variable, or a field/index chain reachable from one) — a
+  temporary's mutation is simply discarded, matching pass-by-value semantics. Supports default
+  params like regular functions; dispatch is by struct name, so two structs may each define a
+  same-named method. New statement-level grammar: `p.method(args)` as a bare statement (was
+  previously only parseable as an expression via `set x = p.method(args)`). Tests:
+  `tests/oop.rs` (5). Docs: README "Structs and methods", REFERENCE.md §2.4 + formal grammar
+  §8. Example: `examples/oop.rach` (wired into CI's offline-examples list).
+
+### Done — follow-up pass (edge-case tests, interpreter fuzzing, clippy::pedantic)
+
+- **OOP edge-case coverage**: `tests/oop.rs` grew from 5 to 9 tests — a method calling another
+  method on `self` (from within the same `impl`), `self`-mutation write-back through a *nested*
+  struct field (`line.a.move(...)`, where `a` is itself a struct), two structs defining a
+  same-named method without colliding, and calling a method on a non-struct value failing
+  cleanly. `examples/oop_composition.rach` demonstrates all of it; wired into CI.
+- **Interpreter-level fuzzing** (previously flagged as needing a generator): `tests/fuzz_interp.rs`
+  generates programs from a fixed, always-parseable skeleton with randomized expression holes
+  (literals, indices, field/method calls, arithmetic) instead of random text, so it actually
+  reaches `eval_expr`/`eval_binary`/stdlib dispatch — `tests/fuzz.rs`'s random text almost never
+  gets past the parser. **Found and fixed three real crash bugs on the first pass**: `-i64::MIN`
+  and `abs(i64::MIN)` both panicked (checked negation/abs has no positive counterpart for that
+  value — reachable from ordinary `x * x` on large ints, since `eval_binary`'s `f64` round trip
+  saturates to exactly `i64::MIN`); both fixed by promoting to float on overflow. `for i in <huge
+  non-negative int>:` built an N-element `Vec<Value>` eagerly, so `for i in 999999999999:` OOM-
+  aborted the process (not even catchable by `try/rescue`) before running a single iteration;
+  fixed by iterating a lazy `Range` instead. Regression test in `tests/runtime.rs` for the first;
+  the fuzzer itself exercises all three every run.
+- **`clippy::pedantic`**: `cargo clippy --fix -- -W clippy::pedantic` plus a hand-verified batch
+  of the `let...else`/`format_push_string`/`assigning_clones` suggestions clippy marks
+  correct-but-not-machine-applicable (had to hand-fix one `--fix` output that used an ugly
+  fully-qualified path, and hand-complete one `unnecessary_wraps` suggestion whose two-part fix
+  — signature *and* body — I'd applied only half of, plus two `write!` call sites that needed a
+  `use std::fmt::Write` clippy's suggestion didn't add). Net: ~1500 → ~600 occurrences. What's
+  left is a deliberate, documented `#![allow(...)]` in `src/lib.rs`/`src/main.rs` — see the
+  comment there for why each category (missing_errors_doc, the `cast_*` family,
+  needless_continue, too_many_lines, and a few judgement-call lints) isn't worth chasing further
+  in this codebase. Default `cargo clippy -- -D warnings` (the CI gate) was clean before and
+  after; build/tests unaffected throughout.
+
 ### Left (needs direction / external deps)
 
-- **P1 diagnostics with spans** (Phase 5): thread token `col` into errors + caret rendering.
-  Dep choice: `ariadne` vs `codespan-reporting` vs hand-rolled (current `report_pretty` is
-  close). Needs network to add a crate.
-- **Corpus + `insta` snapshot tests** (Phase 4): needs `insta` dep.
-- **`criterion` benches + profiling** (Phase 6): needs `criterion` dep.
-- **CI workflow** (Phase 8): `build`/`test`/`clippy -D warnings`/`fmt --check`. Blocked on
-  clearing the ~620 remaining clippy::pedantic warnings first (mostly mechanical:
-  inline `format!` args, redundant closures, lossy casts).
-- **`thiserror` for error types** (P1-c): needs network.
+- **CI workflow** (Phase 8) fmt gate: `cargo fmt --check` is still deliberately not gated (see
+  the CI section above — the codebase's compact one-line style predates this session and
+  rustfmt would rewrite it wholesale). No change here.
+- **Corpus fuzzing beyond well-formed programs**: `tests/fuzz_interp.rs` generates programs from
+  one fixed skeleton with randomized leaves — good at finding numeric/dispatch edge cases, but
+  it never varies control-flow *shape* (no nested user-defined blocks, no varying struct/impl
+  counts). A true random-AST generator would cover more ground; not attempted this pass.
 
 ### Next step
 
-Proceed to **P1 span diagnostics** (highest remaining priority) — recommend hand-rolling
-the caret into the existing `report_pretty` to avoid a new dependency, since it already does
-the source-window rendering. Confirm dependency policy (is adding crates from crates.io OK
-in this environment?) before the `insta`/`criterion`/`thiserror`/`ariadne` phases.
+The audit's outstanding P1/P2 items (diagnostics spans, tests, thiserror, insta, criterion,
+interpreter fuzzing, OOP edge cases, clippy::pedantic) are now all closed. Candidates for a
+future pass: extend OOP with a second struct-like construct if a concrete need shows up (kept
+deliberately minimal — no inheritance/traits — since nothing in the existing stdlib or examples
+asked for one yet); a random-AST-shaped fuzzer (see above); and the small `cast_possible_wrap`/
+`cast_possible_truncation` residue left in `tests/`/`benches/` (not part of the lib/bin crates,
+so the `#![allow]` doesn't reach them — harmless either way since they're pedantic-only).

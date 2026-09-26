@@ -1,3 +1,23 @@
+// Same deliberate `clippy::pedantic` allow-list as `src/lib.rs` (rationale there) — this
+// bin crate root needs its own copy since attributes on the lib crate don't cross the
+// crate boundary.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::needless_continue,
+    clippy::too_many_lines,
+    clippy::match_same_arms,
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::many_single_char_names,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::float_cmp
+)]
+
 use rach::{interpreter, lexer, parser, repl};
 
 use std::env;
@@ -7,7 +27,7 @@ use std::process::ExitCode;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn print_usage() {
-    println!("Rach {} — пиши просто, запускай везде", VERSION);
+    println!("Rach {VERSION} — пиши просто, запускай везде");
     println!();
     println!("Usage:");
     println!("  rach                    open the interactive REPL");
@@ -24,18 +44,19 @@ fn print_usage() {
 ///   2. <path>.rach (if no .rach extension)
 ///   3. examples/<path>
 ///   4. examples/<path>.rach
+///
 /// Returns the first path that exists, or None.
 fn resolve_script_path(path: &str) -> Option<String> {
     use std::path::Path;
     let candidates: Vec<String> = {
         let mut v = vec![path.to_string()];
         if !path.ends_with(".rach") {
-            v.push(format!("{}.rach", path));
+            v.push(format!("{path}.rach"));
         }
         let bare = Path::new(path).file_name().and_then(|s| s.to_str()).unwrap_or(path);
-        v.push(format!("examples/{}", bare));
+        v.push(format!("examples/{bare}"));
         if !bare.ends_with(".rach") {
-            v.push(format!("examples/{}.rach", bare));
+            v.push(format!("examples/{bare}.rach"));
         }
         v
     };
@@ -52,13 +73,13 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
     };
     if let Some(p) = &resolved {
         if p != path {
-            eprintln!("// using {} (not found at {})", p, path);
+            eprintln!("// using {p} (not found at {path})");
         }
     }
     let source = match fs::read_to_string(&read_path) {
         Ok(s) => s,
         Err(e) => {
-            report_pretty("io", 404, path, 0, &format!("cannot read {}: {}", path, e), None);
+            report_pretty("io", 404, path, 0, 0, &format!("cannot read {path}: {e}"), None);
             // Suggest examples/ if any .rach file there matches the basename
             if let Ok(entries) = fs::read_dir("examples") {
                 let stem = std::path::Path::new(path)
@@ -66,12 +87,12 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
                     .and_then(|s| s.to_str())
                     .unwrap_or(path);
                 let hits: Vec<String> = entries
-                    .filter_map(|e| e.ok())
+                    .filter_map(std::result::Result::ok)
                     .map(|e| e.file_name().to_string_lossy().into_owned())
                     .filter(|name| name.ends_with(".rach") && name.contains(stem))
                     .collect();
                 if !hits.is_empty() {
-                    eprintln!("// did you mean: {}", hits.iter().map(|h| format!("examples/{}", h)).collect::<Vec<_>>().join(", "));
+                    eprintln!("// did you mean: {}", hits.iter().map(|h| format!("examples/{h}")).collect::<Vec<_>>().join(", "));
                 }
             }
             return ExitCode::from(2);
@@ -81,7 +102,7 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
     let tokens = match lexer::tokenize(&source) {
         Ok(t) => t,
         Err(e) => {
-            report_pretty("lex", 400, &read_path, e.line, &e.message, Some(&source));
+            report_pretty("lex", 400, &read_path, e.line, e.col, &e.message, Some(&source));
             return ExitCode::from(3);
         }
     };
@@ -89,7 +110,7 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
     let program = match parser::parse(tokens) {
         Ok(p) => p,
         Err(e) => {
-            report_pretty("parse", 422, &read_path, e.line, &e.message, Some(&source));
+            report_pretty("parse", 422, &read_path, e.line, e.col, &e.message, Some(&source));
             return ExitCode::from(4);
         }
     };
@@ -103,7 +124,7 @@ fn run_file(path: &str, check_only: bool) -> ExitCode {
     match interpreter::run(&program, &source, &read_path) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            report_pretty("runtime", e.code, &read_path, e.line, &e.message, Some(&source));
+            report_pretty("runtime", e.code, &read_path, e.line, 0, &e.message, Some(&source));
             ExitCode::from(1)
         }
     }
@@ -135,7 +156,7 @@ fn real_main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "version" | "-v" | "--version" => {
-            println!("rach {}", VERSION);
+            println!("rach {VERSION}");
             ExitCode::SUCCESS
         }
         "check" => {

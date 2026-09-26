@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 serde_json = "1"
+thiserror = "2.0.21"
 
 [build-dependencies]
 cc = "1"
@@ -19,3 +20,11 @@ cc = "1"
 opt-level = 3
 lto = true
 strip = true
+
+[dev-dependencies]
+criterion = "0.8.2"
+insta = "1.48.0"
+
+[[bench]]
+name = "pipeline"
+harness = false
