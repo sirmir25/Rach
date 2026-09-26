@@ -1,8 +1,10 @@
 pub mod ai;
+pub mod args;
 pub mod ascii;
 pub mod bash;
 pub mod collections;
 pub mod drivers;
+pub mod encoding;
 pub mod http;
 pub mod io;
 pub mod json;
@@ -70,6 +72,11 @@ const KNOWN: &[&str] = &[
     "json_parse", "json_stringify",
     // http
     "http_get", "http_post",
+    // encoding
+    "base64_encode", "base64_decode", "base32_encode", "base32_decode",
+    "base58_encode", "base58_decode", "ascii85_encode", "ascii85_decode",
+    "hex_encode", "hex_decode", "binary_encode", "binary_decode",
+    "url_encode", "url_decode",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -323,6 +330,22 @@ pub fn dispatch(
         // ---- http ----
         "http_get"  => http::http_get(positional, line, ctx),
         "http_post" => http::http_post(positional, line, ctx),
+
+        // ---- encoding ----
+        "base64_encode"  => encoding::base64_encode(positional, kwargs, line, ctx),
+        "base64_decode"  => encoding::base64_decode(positional, kwargs, line, ctx),
+        "base32_encode"  => encoding::base32_encode(positional, kwargs, line, ctx),
+        "base32_decode"  => encoding::base32_decode(positional, kwargs, line, ctx),
+        "base58_encode"  => encoding::base58_encode(positional, kwargs, line, ctx),
+        "base58_decode"  => encoding::base58_decode(positional, kwargs, line, ctx),
+        "ascii85_encode" => encoding::ascii85_encode(positional, kwargs, line, ctx),
+        "ascii85_decode" => encoding::ascii85_decode(positional, kwargs, line, ctx),
+        "hex_encode"     => encoding::hex_encode(positional, kwargs, line, ctx),
+        "hex_decode"     => encoding::hex_decode(positional, kwargs, line, ctx),
+        "binary_encode"  => encoding::binary_encode(positional, kwargs, line, ctx),
+        "binary_decode"  => encoding::binary_decode(positional, kwargs, line, ctx),
+        "url_encode"     => encoding::url_encode(positional, kwargs, line, ctx),
+        "url_decode"     => encoding::url_decode(positional, kwargs, line, ctx),
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }
