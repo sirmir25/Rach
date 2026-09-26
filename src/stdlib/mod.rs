@@ -11,6 +11,7 @@ pub mod encoding;
 pub mod enigma;
 pub mod hash;
 pub mod http;
+pub mod image;
 pub mod io;
 pub mod json;
 pub mod logging;
@@ -49,7 +50,7 @@ const KNOWN: &[&str] = &[
     "ascii_banner", "ascii_box", "ascii_pyramid", "ascii_diamond",
     "ascii_border", "ascii_mirror", "ascii_table", "ascii_text",
     "ascii_sparkline", "ascii_bars", "ascii_progress", "ascii_plot",
-    "ascii_tree", "ascii_mandelbrot", "ascii_circle",
+    "ascii_tree", "ascii_mandelbrot", "ascii_circle", "ascii_image",
     // native (C / C++)
     "native_crc32", "native_base64", "native_sort_ints", "native_reverse",
     "run_c", "run_cpp",
@@ -257,6 +258,7 @@ pub fn dispatch(
         "ascii_tree"       => ascii_art::ascii_tree(positional, kwargs, line, ctx),
         "ascii_mandelbrot" => ascii_art::ascii_mandelbrot(positional, kwargs, line, ctx),
         "ascii_circle"     => ascii_art::ascii_circle(positional, kwargs, line, ctx),
+        "ascii_image"      => ascii_art::ascii_image(positional, kwargs, line, ctx),
 
         // ---- native (C / C++) ----
         "native_crc32"     => native::native_crc32(positional, line, ctx),

@@ -414,3 +414,30 @@ pub fn ascii_circle(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> 
     }
     Ok(emit_art(ctx, canvas.render(mode)))
 }
+
+// ---------------- images ----------------
+
+/// BMP / PBM / PGM / PPM file → art. Bright pixels become dense characters (lit dots), which
+/// reads correctly on a dark terminal; `invert=true` for light backgrounds. 1-bit styles
+/// (braille, half) are dithered unless `dither=false`.
+pub fn ascii_image(args: &[Value], kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {
+    let what = "ascii_image";
+    let path = str_arg(args, 0, line, what)?;
+    let width = width_arg(args, 1, kwargs, "width", 80, line, what)?;
+    let mode = render_style(&kw_str(kwargs, "style").unwrap_or_else(|| "ascii".into()), line, what)?;
+    let bytes = std::fs::read(&path).map_err(|e| RuntimeError::new(404, line, format!("{what}: cannot read `{path}`: {e}")))?;
+    let img = crate::stdlib::image::decode(&bytes).map_err(|e| RuntimeError::new(400, line, format!("{what}: `{path}`: {e}")))?;
+
+    let (cell_w, _) = mode.cell();
+    let pw = width * cell_w;
+    let ph = ((img.h as f64 / img.w as f64) * pw as f64 / mode.pixel_aspect()).round().max(1.0) as usize;
+    let mut px = crate::stdlib::image::resample(&img, pw, ph);
+    if kw_bool(kwargs, "invert") { for v in &mut px { *v = 1.0 - *v; } }
+
+    let mut canvas = Canvas::new(pw, ph);
+    for (i, v) in px.iter().enumerate() { canvas.set((i % pw) as i64, (i / pw) as i64, *v); }
+    let one_bit = matches!(mode, Render::Braille | Render::HalfBlocks);
+    let dither = kwargs.get("dither").and_then(|v| v.first()).map_or(one_bit, Value::is_truthy);
+    if dither { canvas.dither(); }
+    Ok(emit_art(ctx, canvas.render(mode)))
+}
