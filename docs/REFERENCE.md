@@ -87,6 +87,7 @@ Inside the body:
 - `for <var> in <expr>:` block; `for k, v in <map>:` to destructure pairs.
 - `break`, `continue`.
 - `try: ... rescue [as <var>]: ...` — catch a runtime error, bind to `<var>` as `{ code, line, message }`.
+- `raise(message [, code])` — throw an error (default code 500, must be positive). `try` catches it; uncaught, it stops the script even without `RACH_STRICT`.
 - `return <expr>`.
 - `error <code> [string <line>]` — print a manual error.
 - `completed` — print the literal word `completed` (optional; commands print it themselves on success).
@@ -197,10 +198,19 @@ hex = native_crc32(content)
 | Command                   | Effect                                                 |
 |---------------------------|--------------------------------------------------------|
 | `run(cmd)` / `sh(cmd)`    | Run via `sh -c` (Win: `cmd /C`); print stdout/stderr   |
+| `exec(cmd, ...)`          | Run and return `{ code, ok, stdout, stderr }`          |
 | `install_package(name)`   | brew/apt-get/dnf/pacman/zypper/apk/winget/pkg          |
 | `reboot()` / `shutdown()` | Print intent only (no execution, for safety)           |
 
 `install_package` honours `RACH_DRY_RUN=1`.
+
+`run` fails on a non-zero exit; `exec` returns the outcome instead, so a script can branch on it. Kwargs: `quiet=true` (don't echo the command or its output), `check=true` (fail on non-zero exit, like `run`), `cwd="dir"`, `env={"KEY": "value"}` (added to the inherited environment), `input="text"` (fed to stdin).
+
+```
+r = exec("git diff --quiet", quiet=true)
+if not r.ok:
+    print(f"uncommitted changes (exit {r.code})")
+```
 
 ### 4.4 Control flow values
 
@@ -365,7 +375,7 @@ Stage is `lex`, `parse`, or `runtime`. Lex and parse errors include the column a
 | 503  | Service unavailable (driver bring-up)            |
 
 ### 5.3 Strict mode
-`RACH_STRICT=1` makes `error N` abort and any runtime command failure terminate the script. Without it, errors are printed and execution continues.
+`RACH_STRICT=1` makes `error N` abort and any runtime command failure terminate the script. Without it, errors are printed and execution continues — except `raise` and a failed `assert`, which always stop the script unless caught.
 
 ---
 

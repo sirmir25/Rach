@@ -17,11 +17,19 @@ pub struct RuntimeError {
     pub message: String,
     /// The value a `return` carries back to its call site; set only on a return signal.
     returned: Option<Box<Value>>,
+    /// Set by `raise`: the script asked to stop, so a top-level command doesn't just print
+    /// the error and carry on the way it does for ordinary command failures.
+    fatal: bool,
 }
 
 impl RuntimeError {
     pub fn new(code: i64, line: usize, message: impl Into<String>) -> Self {
-        Self { code, line, message: message.into(), returned: None }
+        Self { code, line, message: message.into(), returned: None, fatal: false }
+    }
+
+    /// An error thrown by `raise` — catchable by `try`, but aborts the script otherwise.
+    pub fn raised(code: i64, line: usize, message: impl Into<String>) -> Self {
+        Self { fatal: true, ..Self::new(code, line, message) }
     }
 }
 
@@ -179,7 +187,7 @@ const MAX_CALL_DEPTH: usize = 2000;
 /// (It used to be flattened into the message string, which lost nesting: a returned
 /// `[[1, 2], [3, 4]]` arrived as `[1, 2, 3, 4]`.)
 fn return_signal(value: Value) -> RuntimeError {
-    RuntimeError { code: RETURN_SIGNAL_CODE, line: 0, message: "return".into(), returned: Some(Box::new(value)) }
+    RuntimeError { returned: Some(Box::new(value)), ..RuntimeError::new(RETURN_SIGNAL_CODE, 0, "return") }
 }
 
 /// The value a return signal carries; `nil` for a bare `return`.
@@ -520,7 +528,7 @@ fn exec_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
                 Ok(_) => Ok(()),
                 Err(e) if matches!(e.code, RETURN_SIGNAL_CODE | BREAK_SIGNAL_CODE | CONTINUE_SIGNAL_CODE) => Err(e),
                 Err(e) => {
-                    if ctx.strict || ctx.try_depth > 0 {
+                    if ctx.strict || ctx.try_depth > 0 || e.fatal {
                         Err(e)
                     } else {
                         ctx.report_error(e.code, e.line, &e.message);

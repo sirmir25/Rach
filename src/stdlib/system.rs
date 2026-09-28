@@ -1,9 +1,12 @@
+use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::ast::Value;
 use crate::interpreter::{Ctx, RuntimeError};
+use crate::stdlib::args::{kw_bool, kw_str, Kwargs};
 
 fn first_str(args: &[Value], line: usize, what: &str) -> Result<String, RuntimeError> {
     args.first()
@@ -45,6 +48,75 @@ pub fn run_command(args: &[Value], line: usize) -> Result<Value, RuntimeError> {
         }
         Err(e) => Err(RuntimeError::new(500, line, format!("run_command failed: {e}"))),
     }
+}
+
+/// `exec(cmd, quiet=, check=, cwd=, env=, input=)` — like `run`, but hands the outcome back
+/// as `{code, ok, stdout, stderr}` instead of failing on a non-zero exit, so scripts can
+/// branch on it. `check=true` restores `run`'s fail-fast behaviour.
+pub fn exec(args: &[Value], kwargs: &Kwargs, line: usize) -> Result<Value, RuntimeError> {
+    let cmd = first_str(args, line, "exec")?;
+    let quiet = kw_bool(kwargs, "quiet");
+    let (program, shell_arg) = if cfg!(target_os = "windows") {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    };
+    let mut command = Command::new(program);
+    command.arg(shell_arg).arg(&cmd);
+    if let Some(dir) = kw_str(kwargs, "cwd") {
+        command.current_dir(dir);
+    }
+    match kwargs.get("env").and_then(|v| v.first()) {
+        None => {}
+        Some(Value::Map(vars)) => {
+            for (k, v) in vars {
+                command.env(k, v.as_str());
+            }
+        }
+        Some(other) => {
+            return Err(RuntimeError::new(400, line, format!("exec: `env` must be a map, got {}", other.describe())));
+        }
+    }
+    let input = kw_str(kwargs, "input");
+    command.stdin(if input.is_some() { Stdio::piped() } else { Stdio::inherit() });
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    if !quiet {
+        println!("$ {cmd}");
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|e| RuntimeError::new(500, line, format!("exec failed: {e}")))?;
+    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+        // A child that exits without reading stdin closes the pipe; that's its choice, not an error.
+        if let Err(e) = stdin.write_all(text.as_bytes()) {
+            if e.kind() != std::io::ErrorKind::BrokenPipe {
+                return Err(RuntimeError::new(500, line, format!("exec: writing stdin failed: {e}")));
+            }
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| RuntimeError::new(500, line, format!("exec failed: {e}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !quiet {
+        print!("{stdout}");
+        eprint!("{stderr}");
+    }
+    // A process killed by a signal has no exit code; -1 keeps `code` an int and `ok` false.
+    let code = output.status.code().map_or(-1, i64::from);
+    if kw_bool(kwargs, "check") && !output.status.success() {
+        return Err(RuntimeError::new(400 + code.max(1), line, format!("exec: `{cmd}` exited with {code}")));
+    }
+
+    let mut result = BTreeMap::new();
+    result.insert("code".to_string(), Value::Int(code));
+    result.insert("ok".to_string(), Value::Bool(output.status.success()));
+    result.insert("stdout".to_string(), Value::Str(stdout));
+    result.insert("stderr".to_string(), Value::Str(stderr));
+    Ok(Value::Map(result))
 }
 
 pub fn install_package(args: &[Value], line: usize, ctx: &mut Ctx) -> Result<Value, RuntimeError> {

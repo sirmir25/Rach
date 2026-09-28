@@ -37,7 +37,7 @@ const KNOWN: &[&str] = &[
     "read", "write", "exists", "del", "run", "sh", "rm",
     // system / os
     "reboot", "shutdown",
-    "run_command", "install_package",
+    "run_command", "install_package", "exec", "raise",
     "create_file", "read_file", "edit_file", "delete_file", "check_if_exists",
     // web / browser
     "open_in_browser", "open_in_firefox", "open_in_chrome", "open_in_edge", "open_in_safari",
@@ -216,6 +216,8 @@ pub fn dispatch(
         "reboot" => system::reboot(line),
         "shutdown" => system::shutdown(line),
         "run_command" => system::run_command(positional, line),
+        "exec" => system::exec(positional, kwargs, line),
+        "raise" => raise(positional, kwargs, line),
         "install_package" => system::install_package(positional, line, ctx),
         "create_file" => system::create_file(positional, line),
         "read_file" => system::read_file(positional, line, ctx.capturing),
@@ -455,4 +457,15 @@ pub fn dispatch(
 
         other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }
+}
+
+/// `raise(message, code=500)` — fail with a user-defined error that `try/rescue` can catch.
+fn raise(args: &[Value], kwargs: &args::Kwargs, line: usize) -> Result<Value, RuntimeError> {
+    let message = args.first().map_or_else(|| "error raised".to_string(), Value::as_str);
+    let code = args::int_arg(args, 1, kwargs, "code", 500, line, "raise")?;
+    // Negative codes are reserved for the interpreter's return/break/continue signals.
+    if code <= 0 {
+        return Err(RuntimeError::new(400, line, format!("raise: `code` must be positive, got {code}")));
+    }
+    Err(RuntimeError::raised(code, line, message))
 }
