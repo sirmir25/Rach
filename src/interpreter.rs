@@ -15,11 +15,13 @@ pub struct RuntimeError {
     pub code: i64,
     pub line: usize,
     pub message: String,
+    /// The value a `return` carries back to its call site; set only on a return signal.
+    returned: Option<Box<Value>>,
 }
 
 impl RuntimeError {
     pub fn new(code: i64, line: usize, message: impl Into<String>) -> Self {
-        Self { code, line, message: message.into() }
+        Self { code, line, message: message.into(), returned: None }
     }
 }
 
@@ -173,100 +175,27 @@ const CONTINUE_SIGNAL_CODE: i64 = -3;
 /// the interpreter thread.
 const MAX_CALL_DEPTH: usize = 2000;
 
+/// `return` unwinds to its call site through the error channel, carrying the value intact.
+/// (It used to be flattened into the message string, which lost nesting: a returned
+/// `[[1, 2], [3, 4]]` arrived as `[1, 2, 3, 4]`.)
 fn return_signal(value: Value) -> RuntimeError {
-    RuntimeError { code: RETURN_SIGNAL_CODE, line: 0, message: serialize_value(&value) }
+    RuntimeError { code: RETURN_SIGNAL_CODE, line: 0, message: "return".into(), returned: Some(Box::new(value)) }
 }
 
-fn serialize_value(v: &Value) -> String {
-    match v {
-        Value::Nil => "N::nil".into(),
-        Value::Bool(b) => format!("N::bool::{b}"),
-        Value::Int(n) => format!("N::int::{n}"),
-        Value::Float(f) => format!("N::float::{f}"),
-        Value::Str(s) => format!("N::str::{s}"),
-        Value::List(items) => {
-            let parts: Vec<String> = items.iter().map(serialize_value).collect();
-            format!("N::list::{}", parts.join("\u{1F}"))
-        }
-        Value::Map(items) => {
-            let parts: Vec<String> = items.iter()
-                .map(|(k, v)| format!("{}\u{1E}{}", k, serialize_value(v)))
-                .collect();
-            format!("N::map::{}", parts.join("\u{1F}"))
-        }
-        // Structs and lambdas are passed by reference through a side-channel
-        // to avoid the awful round-trip serialization. We stash the live Value
-        // in a thread-local LRU and put a token here.
-        Value::Struct { .. } | Value::Lambda { .. } => {
-            let tok = stash_value(v.clone());
-            format!("N::ref::{tok}")
-        }
-    }
+/// The value a return signal carries; `nil` for a bare `return`.
+fn returned_value(signal: RuntimeError) -> Value {
+    signal.returned.map_or(Value::Nil, |v| *v)
 }
 
-fn deserialize_value(s: &str) -> Value {
-    if s == "N::nil" { return Value::Nil; }
-    if let Some(rest) = s.strip_prefix("N::bool::") {
-        return Value::Bool(rest == "true");
+/// A `break`/`continue` that unwinds out of a function body or the whole script never had a
+/// loop to act on. Turn it into a real error instead of letting it leak into the caller's
+/// loop (or surface as the internal "error[-2]: break").
+fn stray_loop_signal(e: RuntimeError) -> RuntimeError {
+    match e.code {
+        BREAK_SIGNAL_CODE => RuntimeError::new(400, e.line, "`break` outside of a loop"),
+        CONTINUE_SIGNAL_CODE => RuntimeError::new(400, e.line, "`continue` outside of a loop"),
+        _ => e,
     }
-    if let Some(rest) = s.strip_prefix("N::int::") {
-        return Value::Int(rest.parse().unwrap_or(0));
-    }
-    if let Some(rest) = s.strip_prefix("N::float::") {
-        return Value::Float(rest.parse().unwrap_or(0.0));
-    }
-    if let Some(rest) = s.strip_prefix("N::str::") {
-        return Value::Str(rest.to_string());
-    }
-    if let Some(rest) = s.strip_prefix("N::list::") {
-        if rest.is_empty() { return Value::List(Vec::new()); }
-        let items: Vec<Value> = rest.split('\u{1F}').map(deserialize_value).collect();
-        return Value::List(items);
-    }
-    if let Some(rest) = s.strip_prefix("N::map::") {
-        let mut map = std::collections::BTreeMap::new();
-        if !rest.is_empty() {
-            for entry in rest.split('\u{1F}') {
-                if let Some((k, v)) = entry.split_once('\u{1E}') {
-                    map.insert(k.to_string(), deserialize_value(v));
-                }
-            }
-        }
-        return Value::Map(map);
-    }
-    if let Some(rest) = s.strip_prefix("N::ref::") {
-        if let Ok(tok) = rest.parse::<u64>() {
-            if let Some(v) = unstash_value(tok) {
-                return v;
-            }
-        }
-        return Value::Nil;
-    }
-    Value::Str(s.to_string())
-}
-
-// ---- Side-channel for non-serializable Values (Struct, Lambda) ----
-//
-// `return_signal` round-trips through a String, which is fine for primitives
-// but loses information for types that contain Stmt or nested Values cheaply.
-// Stash them in a thread-local map and return a token instead.
-thread_local! {
-    static REF_STORE: std::cell::RefCell<std::collections::HashMap<u64, Value>>
-        = std::cell::RefCell::new(std::collections::HashMap::new());
-    static REF_NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
-}
-
-fn stash_value(v: Value) -> u64 {
-    REF_NEXT.with(|n| {
-        let id = n.get();
-        n.set(id.wrapping_add(1));
-        REF_STORE.with(|s| s.borrow_mut().insert(id, v));
-        id
-    })
-}
-
-fn unstash_value(tok: u64) -> Option<Value> {
-    REF_STORE.with(|s| s.borrow_mut().remove(&tok))
 }
 
 #[must_use]
@@ -321,7 +250,7 @@ pub fn run_in_ctx(program: &Program, ctx: &mut Ctx) -> Result<(), RuntimeError> 
         match result {
             Ok(()) => Ok(()),
             Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(()),
-            Err(e) => Err(e),
+            Err(e) => Err(stray_loop_signal(e)),
         }
     } else {
         Ok(())
@@ -383,7 +312,7 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
     match result {
         Ok(()) => Ok(()),
         Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(()),
-        Err(e) => Err(e),
+        Err(e) => Err(stray_loop_signal(e)),
     }
 }
 
@@ -395,6 +324,17 @@ fn run_block(stmts: &[Stmt], ctx: &mut Ctx) -> Result<(), RuntimeError> {
 }
 
 fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
+    // Expression-level errors (an undefined variable, a const reassignment) don't know their
+    // line; the innermost statement that ran them does, so it fills the line in on the way out.
+    exec_stmt(stmt, ctx).map_err(|mut e| {
+        if e.line == 0 {
+            e.line = stmt.line();
+        }
+        e
+    })
+}
+
+fn exec_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
     match stmt {
         Stmt::Completed { .. } => {
             println!("completed");
@@ -434,26 +374,14 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
                 Value::Str(s) => Box::new(s.split(',').map(|x| Value::Str(x.trim().to_string())).collect::<Vec<_>>().into_iter()),
                 Value::Int(n) if n >= 0 => Box::new((0..n).map(Value::Int)),
                 other => {
-                    return Err(RuntimeError::new(400, *line, format!("for: cannot iterate over {other:?}")));
+                    return Err(RuntimeError::new(400, *line, format!("for: cannot iterate over {}", other.describe())));
                 }
             };
             for item in items {
                 ctx.scopes.push(Scope::default());
-                if vars.len() == 1 {
-                    ctx.set_var(vars[0].clone(), item)?;
-                } else {
-                    // tuple unpacking: item must be a list with enough elements
-                    let parts = match &item {
-                        Value::List(xs) => xs.clone(),
-                        other => return Err(RuntimeError::new(400, *line,
-                            format!("for: tuple unpack expects a list, got {other:?}"))),
-                    };
-                    for (i, vname) in vars.iter().enumerate() {
-                        let val = parts.get(i).cloned().unwrap_or(Value::Nil);
-                        ctx.set_var(vname.clone(), val)?;
-                    }
-                }
-                let res = run_block(body, ctx);
+                // Pop on every path: a scope left behind by an error would outlive a
+                // surrounding `try` and swallow the variables its `rescue` body sets.
+                let res = bind_loop_vars(vars, item, *line, ctx).and_then(|()| run_block(body, ctx));
                 ctx.scopes.pop();
                 match res {
                     Ok(()) => {}
@@ -665,60 +593,76 @@ fn run_stmt(stmt: &Stmt, ctx: &mut Ctx) -> Result<(), RuntimeError> {
         }
         Stmt::CFor { init, cond, step, body, line } => {
             ctx.scopes.push(Scope::default());
-            if let Some(init_stmt) = init {
-                run_stmt(init_stmt, ctx)?;
-            }
-            loop {
-                if let Some(cond_expr) = cond {
-                    let v = eval_expr(cond_expr, ctx)?;
-                    if !v.is_truthy() { break; }
-                }
-                ctx.scopes.push(Scope::default());
-                let res = run_block(body, ctx);
-                ctx.scopes.pop();
-                match res {
-                    Ok(()) => {}
-                    Err(e) if e.code == BREAK_SIGNAL_CODE => { ctx.scopes.pop(); return Ok(()); }
-                    Err(e) if e.code == CONTINUE_SIGNAL_CODE => {}
-                    Err(e) => { ctx.scopes.pop(); return Err(e); }
-                }
-                if let Some(step_stmt) = step {
-                    run_stmt(step_stmt, ctx).map_err(|e| RuntimeError::new(e.code, *line, e.message))?;
-                }
-            }
+            let res = run_cfor(init.as_deref(), cond.as_ref(), step.as_deref(), body, *line, ctx);
             ctx.scopes.pop();
-            Ok(())
+            res
         }
         Stmt::Match { expr, arms, .. } => {
             let val = eval_expr(expr, ctx)?;
             for arm in arms {
                 let mut bindings: HashMap<String, Value> = HashMap::new();
-                if match_pattern(&arm.pattern, &val, &mut bindings) {
-                    ctx.scopes.push(Scope::default());
-                    for (k, v) in bindings {
-                        ctx.set_var(k, v)?;
-                    }
-                    // evaluate guard with bindings in scope
-                    let guard_ok = match &arm.guard {
-                        None => true,
-                        Some(g) => eval_expr(g, ctx)?.is_truthy(),
-                    };
-                    if guard_ok {
-                        let res = run_block(&arm.body, ctx);
-                        ctx.scopes.pop();
-                        match res {
-                            Ok(()) => {}
-                            Err(e) if e.code == BREAK_SIGNAL_CODE => {}
-                            Err(e) => return Err(e),
-                        }
-                        return Ok(());
-                    }
-                    ctx.scopes.pop();
+                if !match_pattern(&arm.pattern, &val, &mut bindings) {
+                    continue;
+                }
+                // Bindings live in the arm's own scope: they shadow same-named outer
+                // variables instead of overwriting them — even when the guard then rejects
+                // the arm. `break`/`continue` pass through to the enclosing loop, as in Rust
+                // (unlike `switch`, a `match` arm never falls through, so there is nothing
+                // for a `break` to stop inside it).
+                ctx.scopes.push(Scope { vars: bindings, ..Scope::default() });
+                let res = match &arm.guard {
+                    Some(guard) => eval_expr(guard, ctx).map(|v| v.is_truthy()),
+                    None => Ok(true),
+                }
+                .and_then(|taken| if taken { run_block(&arm.body, ctx).map(|()| true) } else { Ok(false) });
+                ctx.scopes.pop();
+                if res? {
+                    return Ok(());
                 }
             }
             Ok(())
         }
     }
+}
+
+/// `for (init; cond; step):` — runs inside the loop's own scope, which the caller pushes and
+/// pops so that an error anywhere in here can't leave it behind.
+fn run_cfor(init: Option<&Stmt>, cond: Option<&Expr>, step: Option<&Stmt>, body: &[Stmt], line: usize, ctx: &mut Ctx) -> Result<(), RuntimeError> {
+    if let Some(init_stmt) = init {
+        run_stmt(init_stmt, ctx)?;
+    }
+    loop {
+        if let Some(cond_expr) = cond {
+            if !eval_expr(cond_expr, ctx)?.is_truthy() { break; }
+        }
+        ctx.scopes.push(Scope::default());
+        let res = run_block(body, ctx);
+        ctx.scopes.pop();
+        match res {
+            Ok(()) => {}
+            Err(e) if e.code == BREAK_SIGNAL_CODE => break,
+            Err(e) if e.code == CONTINUE_SIGNAL_CODE => {}
+            Err(e) => return Err(e),
+        }
+        if let Some(step_stmt) = step {
+            run_stmt(step_stmt, ctx).map_err(|e| RuntimeError::new(e.code, line, e.message))?;
+        }
+    }
+    Ok(())
+}
+
+/// Bind one `for` item to the loop variable(s); several names unpack a list item.
+fn bind_loop_vars(vars: &[String], item: Value, line: usize, ctx: &mut Ctx) -> Result<(), RuntimeError> {
+    if let [var] = vars {
+        return ctx.set_var(var.clone(), item);
+    }
+    let Value::List(parts) = item else {
+        return Err(RuntimeError::new(400, line, format!("for: tuple unpack expects a list, got {}", item.describe())));
+    };
+    for (i, name) in vars.iter().enumerate() {
+        ctx.set_var(name.clone(), parts.get(i).cloned().unwrap_or(Value::Nil))?;
+    }
+    Ok(())
 }
 
 /// Returns true if `val` matches `pattern`, and populates `bindings`.
@@ -808,7 +752,7 @@ fn assign_to_target(target: &AssignTarget, value: Value, is_const: bool, line: u
                         fields.insert(key_val.as_str(), value);
                         Ok(())
                     }
-                    other => Err(RuntimeError::new(400, line, format!("cannot index-assign into {other:?}"))),
+                    other => Err(RuntimeError::new(400, line, format!("cannot index-assign into {}", other.describe()))),
                 }
             }))
         }
@@ -818,7 +762,7 @@ fn assign_to_target(target: &AssignTarget, value: Value, is_const: bool, line: u
                 match container {
                     Value::Struct { fields, .. } => { fields.insert(field_name, value); Ok(()) }
                     Value::Map(m) => { m.insert(field_name, value); Ok(()) }
-                    other => Err(RuntimeError::new(400, line, format!("cannot field-assign on {other:?}"))),
+                    other => Err(RuntimeError::new(400, line, format!("cannot field-assign on {}", other.describe()))),
                 }
             }))
         }
@@ -859,7 +803,7 @@ fn field_mut<'a>(v: &'a mut Value, name: &str, line: usize) -> Result<&'a mut Va
     match v {
         Value::Struct { fields, .. } => fields.get_mut(name).ok_or_else(|| RuntimeError::new(404, line, format!("no field `{name}`"))),
         Value::Map(m) => Ok(m.entry(name.to_string()).or_insert(Value::Nil)),
-        other => Err(RuntimeError::new(400, line, format!("cannot access field `{name}` on {other:?}"))),
+        other => Err(RuntimeError::new(400, line, format!("cannot access field `{name}` on {}", other.describe()))),
     }
 }
 
@@ -873,7 +817,7 @@ fn index_mut<'a>(v: &'a mut Value, key: &Value, line: usize) -> Result<&'a mut V
         }
         Value::Map(m) => Ok(m.entry(key.as_str()).or_insert(Value::Nil)),
         Value::Struct { fields, .. } => Ok(fields.entry(key.as_str()).or_insert(Value::Nil)),
-        other => Err(RuntimeError::new(400, line, format!("cannot index into {other:?}"))),
+        other => Err(RuntimeError::new(400, line, format!("cannot index into {}", other.describe()))),
     }
 }
 
@@ -881,7 +825,7 @@ fn field_of(v: &Value, name: &str, line: usize) -> Result<Value, RuntimeError> {
     match v {
         Value::Struct { fields, .. } => fields.get(name).cloned().ok_or_else(|| RuntimeError::new(404, line, format!("no field `{name}`"))),
         Value::Map(m) => Ok(m.get(name).cloned().unwrap_or(Value::Nil)),
-        other => Err(RuntimeError::new(400, line, format!("cannot read field `{name}` on {other:?}"))),
+        other => Err(RuntimeError::new(400, line, format!("cannot read field `{name}` on {}", other.describe()))),
     }
 }
 
@@ -907,7 +851,7 @@ fn index_into(t: &Value, k: &Value, line: usize) -> Result<Value, RuntimeError> 
             chars.get(idx as usize).map(|c| Value::Str(c.to_string()))
                 .ok_or_else(|| RuntimeError::new(404, line, format!("string index out of range: {i}")))
         }
-        _ => Err(RuntimeError::new(400, line, format!("cannot index {t:?} by {k:?}"))),
+        _ => Err(RuntimeError::new(400, line, format!("cannot index {} by {}", t.describe(), k.describe()))),
     }
 }
 
@@ -947,7 +891,7 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
             "lines"  => Some(Value::List(s.lines().map(|l| Value::Str(l.to_string())).collect())),
             "repeat" => {
                 let n = args.first().and_then(Value::as_f64).unwrap_or(0.0) as usize;
-                Some(Value::Str(s.repeat(n)))
+                Some(Value::Str(repeat_str(s, n, line)?))
             }
             "is_empty" => Some(Value::Bool(s.is_empty())),
             _ => None,
@@ -976,7 +920,7 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
             }
             "sort" | "sorted" => {
                 let mut new = items.clone();
-                new.sort_by_key(Value::as_str);
+                new.sort_by(compare_values);
                 Some(Value::List(new))
             }
             "join" => {
@@ -987,9 +931,10 @@ fn call_method(obj: &Value, method: &str, args: &[Value], line: usize, ctx: &mut
             "first" => Some(items.first().cloned().unwrap_or(Value::Nil)),
             "last"  => Some(items.last().cloned().unwrap_or(Value::Nil)),
             "slice" => {
-                let start = args.first().and_then(Value::as_f64).unwrap_or(0.0) as usize;
-                let end   = args.get(1).and_then(Value::as_f64).map_or(items.len(), |n| n as usize);
-                Some(Value::List(items[start.min(items.len())..end.min(items.len())].to_vec()))
+                let start = args.first().and_then(Value::as_f64).unwrap_or(0.0) as i64;
+                let end   = args.get(1).and_then(Value::as_f64).map(|n| n as i64);
+                let (lo, hi) = stdlib::collections::slice_bounds(items.len(), start, end);
+                Some(Value::List(items[lo..hi].to_vec()))
             }
             "map" => {
                 let f = args.first().cloned().unwrap_or(Value::Nil);
@@ -1271,16 +1216,50 @@ pub fn call_value(callee: &Value, args: Vec<Value>, line: usize, ctx: &mut Ctx) 
             for (p, v) in params.iter().zip(args) {
                 frame.vars.insert(p.clone(), v);
             }
-            ctx.scopes.push(frame);
-            let result = run_block(body, ctx);
-            ctx.scopes.pop();
-            match result {
-                Ok(()) => Ok(Value::Nil),
-                Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(deserialize_value(&e.message)),
-                Err(e) => Err(e),
-            }
+            enter_call(ctx, line, format_args!("lambda"))?;
+            let (result, _) = run_in_frame(frame, body, ctx);
+            ctx.call_depth -= 1;
+            finish_call(result)
         }
-        other => Err(RuntimeError::new(400, line, format!("not callable: {other:?}"))),
+        other => Err(RuntimeError::new(400, line, format!("not callable: {}", other.describe()))),
+    }
+}
+
+/// Count one more nested call, refusing past [`MAX_CALL_DEPTH`]. Pair with
+/// `ctx.call_depth -= 1` once the call returns.
+fn enter_call(ctx: &mut Ctx, line: usize, callee: std::fmt::Arguments<'_>) -> Result<(), RuntimeError> {
+    if ctx.call_depth >= MAX_CALL_DEPTH {
+        return Err(RuntimeError::new(500, line, format!(
+            "call stack exceeded {MAX_CALL_DEPTH} frames (infinite recursion?) in `{callee}`"
+        )));
+    }
+    ctx.call_depth += 1;
+    Ok(())
+}
+
+/// Run a function body in `frame`, stacked on the global scope alone. The caller's locals are
+/// set aside for the duration, so a callee can't read or overwrite them — without this, a
+/// helper's `set tmp = …` clobbered its caller's `tmp` (dynamic scoping). Globals — the
+/// implicit `main`'s variables — stay visible and assignable. Returns the frame as it stood
+/// at the end, for methods to read `self` back out of.
+fn run_in_frame(frame: Scope, body: &[Stmt], ctx: &mut Ctx) -> (Result<(), RuntimeError>, Scope) {
+    let globals = ctx.scopes.len().min(1);
+    let caller_scopes = ctx.scopes.split_off(globals);
+    ctx.scopes.push(frame);
+    let result = run_block(body, ctx);
+    // Anything an error left pushed above the frame goes with it.
+    ctx.scopes.truncate(globals + 1);
+    let frame = ctx.scopes.pop().unwrap_or_default();
+    ctx.scopes.extend(caller_scopes);
+    (result, frame)
+}
+
+/// A function's result: its `return` value, `nil` if it ran off the end, or the error.
+fn finish_call(result: Result<(), RuntimeError>) -> Result<Value, RuntimeError> {
+    match result {
+        Ok(()) => Ok(Value::Nil),
+        Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(returned_value(e)),
+        Err(e) => Err(stray_loop_signal(e)),
     }
 }
 
@@ -1308,28 +1287,14 @@ fn call_user_function(name: &str, arg_values: Vec<Value>, line: usize, ctx: &mut
         all_args.push(default_val);
     }
 
-    if ctx.call_depth >= MAX_CALL_DEPTH {
-        return Err(RuntimeError::new(
-            500, line,
-            format!("call stack exceeded {MAX_CALL_DEPTH} frames (infinite recursion?) in `{name}`"),
-        ));
-    }
-
     let mut frame = Scope::default();
     for (p, v) in func.params.iter().zip(all_args) {
         frame.vars.insert(p.clone(), v);
     }
-    ctx.call_depth += 1;
-    ctx.scopes.push(frame);
-    let result = run_block(&func.body, ctx);
-    ctx.scopes.pop();
+    enter_call(ctx, line, format_args!("{name}"))?;
+    let (result, _) = run_in_frame(frame, &func.body, ctx);
     ctx.call_depth -= 1;
-
-    match result {
-        Ok(()) => Ok(Value::Nil),
-        Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(deserialize_value(&e.message)),
-        Err(e) => Err(e),
-    }
+    finish_call(result)
 }
 
 /// Call a user-defined `impl` method with `self_val` bound to its `self` parameter.
@@ -1375,36 +1340,68 @@ fn call_struct_method(
         all_args.push(default_val);
     }
 
-    if ctx.call_depth >= MAX_CALL_DEPTH {
-        return Err(RuntimeError::new(500, line, format!(
-            "call stack exceeded {MAX_CALL_DEPTH} frames (infinite recursion?) in `{struct_name}.{method_name}`"
-        )));
-    }
-
     let mut frame = Scope::default();
     frame.vars.insert("self".to_string(), self_val);
     for (p, v) in rest_params.iter().zip(all_args) {
         frame.vars.insert(p.clone(), v);
     }
-    ctx.call_depth += 1;
-    ctx.scopes.push(frame);
-    let result = run_block(&func.body, ctx);
-    let self_after = ctx.scopes.last()
-        .and_then(|s| s.vars.get("self").cloned())
-        .unwrap_or(Value::Nil);
-    ctx.scopes.pop();
+    enter_call(ctx, line, format_args!("{struct_name}.{method_name}"))?;
+    let (result, mut frame) = run_in_frame(frame, &func.body, ctx);
     ctx.call_depth -= 1;
-
-    let ret = match result {
-        Ok(()) => Value::Nil,
-        Err(e) if e.code == RETURN_SIGNAL_CODE => deserialize_value(&e.message),
-        Err(e) => return Err(e),
-    };
-    Ok((ret, self_after))
+    let self_after = frame.vars.remove("self").unwrap_or(Value::Nil);
+    Ok((finish_call(result)?, self_after))
 }
 
 #[must_use]
 pub fn values_equal_pub(l: &Value, r: &Value) -> bool { values_equal(l, r) }
+
+/// The order `sort`/`sorted` use: numbers by value (ints exactly), strings and bools the usual
+/// way, lists element by element. Values of different kinds group by kind — nil, bool,
+/// number, str, list, map, struct, fn — so sorting a mixed list never fails.
+#[must_use]
+pub fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    fn kind(v: &Value) -> u8 {
+        match v {
+            Value::Nil => 0,
+            Value::Bool(_) => 1,
+            Value::Int(_) | Value::Float(_) => 2,
+            Value::Str(_) => 3,
+            Value::List(_) => 4,
+            Value::Map(_) => 5,
+            Value::Struct { .. } => 6,
+            Value::Lambda { .. } => 7,
+        }
+    }
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Int(x), Value::Float(y)) => (*x as f64).total_cmp(y),
+        (Value::Float(x), Value::Int(y)) => x.total_cmp(&(*y as f64)),
+        (Value::Float(x), Value::Float(y)) => x.total_cmp(y),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+        (Value::List(x), Value::List(y)) => x.iter().zip(y)
+            .map(|(p, q)| compare_values(p, q))
+            .find(|o| o.is_ne())
+            .unwrap_or_else(|| x.len().cmp(&y.len())),
+        _ => kind(a).cmp(&kind(b)),
+    }
+}
+
+/// `s.repeat(n)` that reports an impossible size as a Rach error: `String::repeat` panics
+/// when the length overflows and aborts the whole process when the allocation fails.
+fn repeat_str(s: &str, n: usize, line: usize) -> Result<String, RuntimeError> {
+    if s.is_empty() {
+        return Ok(String::new());
+    }
+    let too_big = || RuntimeError::new(400, line, format!("repeat: {n} copies of a {}-byte string don't fit in memory", s.len()));
+    let total = s.len().checked_mul(n).ok_or_else(too_big)?;
+    let mut out = String::new();
+    out.try_reserve_exact(total).map_err(|_| too_big())?;
+    for _ in 0..n {
+        out.push_str(s);
+    }
+    Ok(out)
+}
 
 fn values_equal(l: &Value, r: &Value) -> bool {
     match (l, r) {
@@ -1447,24 +1444,22 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, Ru
         }
     }
 
-    // Bitwise: int-only.
-    if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr) {
-        let li = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bitwise: {l:?} is not a number")))? as i64;
-        let ri = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bitwise: {r:?} is not a number")))? as i64;
-        let res = match op {
-            BinOp::BitAnd => li & ri,
-            BinOp::BitOr  => li | ri,
-            BinOp::BitXor => li ^ ri,
-            BinOp::Shl    => li.checked_shl(ri as u32).unwrap_or(0),
-            BinOp::Shr    => li.checked_shr(ri as u32).unwrap_or(0),
-            _ => unreachable!(),
-        };
-        return Ok(Value::Int(res));
+    // Two ints stay exact. Routing them through f64 (as this used to) rounded anything past
+    // 2^53 — `123456789 * 987654321` came out 5 too low — and saturated overflow at
+    // i64::MAX. A result that doesn't fit becomes a float: "int if exact, else float".
+    if let (Value::Int(a), Value::Int(b)) = (l, r) {
+        if let Some(v) = int_binary(op, *a, *b, line)? {
+            return Ok(v);
+        }
     }
 
-    let lf = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {l:?} as number")))?;
-    let rf = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {r:?} as number")))?;
-    let both_int = matches!((l, r), (Value::Int(_), Value::Int(_)));
+    let lf = l.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {} as a number", l.describe())))?;
+    let rf = r.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot use {} as a number", r.describe())))?;
+
+    // Bitwise on floats, bools or numeric strings: truncate to int first.
+    if let Some(n) = bitwise(op, lf as i64, rf as i64) {
+        return Ok(Value::Int(n));
+    }
 
     if matches!(op, BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge) {
         return Ok(Value::Bool(match op {
@@ -1491,13 +1486,46 @@ fn eval_binary(op: BinOp, l: &Value, r: &Value, line: usize) -> Result<Value, Ru
         BinOp::Pow => lf.powf(rf),
         _ => unreachable!(),
     };
+    Ok(Value::Float(result))
+}
 
-    let stay_int = both_int && !matches!(op, BinOp::Div | BinOp::Pow) && result == result.trunc();
-    if stay_int {
-        Ok(Value::Int(result as i64))
-    } else {
-        Ok(Value::Float(result))
-    }
+/// Exact `int ⊕ int`, or `None` for the operators that are float operations even on ints
+/// (`/` and `^`, REFERENCE §3.2).
+fn int_binary(op: BinOp, a: i64, b: i64, line: usize) -> Result<Option<Value>, RuntimeError> {
+    let exact_or_float = |exact: Option<i64>, approx: f64| exact.map_or(Value::Float(approx), Value::Int);
+    let (af, bf) = (a as f64, b as f64);
+    Ok(Some(match op {
+        BinOp::Add => exact_or_float(a.checked_add(b), af + bf),
+        BinOp::Sub => exact_or_float(a.checked_sub(b), af - bf),
+        BinOp::Mul => exact_or_float(a.checked_mul(b), af * bf),
+        BinOp::Mod => {
+            if b == 0 { return Err(RuntimeError::new(400, line, "modulo by zero")); }
+            // Only `i64::MIN % -1` overflows, and its remainder is 0.
+            Value::Int(a.checked_rem_euclid(b).unwrap_or(0))
+        }
+        BinOp::Lt => Value::Bool(a < b),
+        BinOp::Gt => Value::Bool(a > b),
+        BinOp::Le => Value::Bool(a <= b),
+        BinOp::Ge => Value::Bool(a >= b),
+        _ => match bitwise(op, a, b) {
+            Some(n) => Value::Int(n),
+            None => return Ok(None),
+        },
+    }))
+}
+
+/// Result of a bitwise operator, or `None` when `op` isn't one. Shifting by a negative
+/// amount or by 64 or more gives 0.
+fn bitwise(op: BinOp, a: i64, b: i64) -> Option<i64> {
+    let shift = |f: fn(i64, u32) -> Option<i64>| u32::try_from(b).ok().and_then(|s| f(a, s)).unwrap_or(0);
+    Some(match op {
+        BinOp::BitAnd => a & b,
+        BinOp::BitOr => a | b,
+        BinOp::BitXor => a ^ b,
+        BinOp::Shl => shift(i64::checked_shl),
+        BinOp::Shr => shift(i64::checked_shr),
+        _ => return None,
+    })
 }
 
 fn eval_unary(op: UnaryOp, v: &Value, line: usize) -> Result<Value, RuntimeError> {
@@ -1510,13 +1538,16 @@ fn eval_unary(op: UnaryOp, v: &Value, line: usize) -> Result<Value, RuntimeError
             Value::Int(n) => Ok(n.checked_neg().map_or_else(|| Value::Float(-(*n as f64)), Value::Int)),
             Value::Float(f) => Ok(Value::Float(-f)),
             other => {
-                let f = other.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot negate {other:?}")))?;
+                let f = other.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("cannot negate {}", other.describe())))?;
                 Ok(Value::Float(-f))
             }
         }
         UnaryOp::Not => Ok(Value::Bool(!v.is_truthy())),
         UnaryOp::BitNot => {
-            let i = v.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bit-not: {v:?} is not a number")))? as i64;
+            let i = match v {
+                Value::Int(n) => *n,
+                other => other.as_f64().ok_or_else(|| RuntimeError::new(400, line, format!("bit-not: {} is not a number", other.describe())))? as i64,
+            };
             Ok(Value::Int(!i))
         }
     }

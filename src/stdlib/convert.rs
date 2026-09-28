@@ -40,17 +40,7 @@ pub fn to_int(v: &Value) -> Result<i64, String> {
 }
 
 pub fn type_name(v: &Value) -> String {
-    match v {
-        Value::Int(_) => "int".into(),
-        Value::Float(_) => "float".into(),
-        Value::Str(_) => "str".into(),
-        Value::Bool(_) => "bool".into(),
-        Value::List(_) => "list".into(),
-        Value::Map(_) => "map".into(),
-        Value::Struct { name, .. } => name.clone(),
-        Value::Lambda { .. } => "fn".into(),
-        Value::Nil => "nil".into(),
-    }
+    v.type_name()
 }
 
 pub fn int(args: &[Value], _kwargs: &Kwargs, line: usize, ctx: &Ctx) -> Result<Value, RuntimeError> {

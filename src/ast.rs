@@ -95,6 +95,44 @@ impl Value {
         }
     }
 
+    /// The name `type_of` reports: `int`, `str`, `list`, … or a struct's own name.
+    #[must_use]
+    pub fn type_name(&self) -> String {
+        match self {
+            Value::Int(_) => "int".into(),
+            Value::Float(_) => "float".into(),
+            Value::Str(_) => "str".into(),
+            Value::Bool(_) => "bool".into(),
+            Value::List(_) => "list".into(),
+            Value::Map(_) => "map".into(),
+            Value::Struct { name, .. } => name.clone(),
+            Value::Lambda { .. } => "fn".into(),
+            Value::Nil => "nil".into(),
+        }
+    }
+
+    /// Type plus a short preview (`str "abc"`, `list [1, 2]`, `fn(x)`) for error messages.
+    /// Used instead of `{:?}`, which dumps a lambda's whole syntax tree and prints
+    /// `Str("abc")` where a user wrote `"abc"`.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        const MAX_CHARS: usize = 40;
+        let preview = match self {
+            Value::Nil => return "nil".into(),
+            Value::Lambda { params, .. } => return format!("fn({})", params.join(", ")),
+            Value::Struct { .. } => self.as_str(),
+            Value::Str(s) => format!("{} {s:?}", self.type_name()),
+            Value::List(_) => format!("list [{}]", self.as_str()),
+            _ => format!("{} {}", self.type_name(), self.as_str()),
+        };
+        if preview.chars().count() <= MAX_CHARS {
+            return preview;
+        }
+        let mut short: String = preview.chars().take(MAX_CHARS).collect();
+        short.push('…');
+        short
+    }
+
     #[must_use]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
@@ -352,6 +390,37 @@ pub enum Stmt {
         arms: Vec<MatchArm>,
         line: usize,
     },
+}
+
+impl Stmt {
+    /// Source line the statement starts on.
+    #[must_use]
+    pub fn line(&self) -> usize {
+        match self {
+            Stmt::Call { line, .. }
+            | Stmt::Assign { line, .. }
+            | Stmt::CompoundAssign { line, .. }
+            | Stmt::IfOs { line, .. }
+            | Stmt::If { line, .. }
+            | Stmt::While { line, .. }
+            | Stmt::Break { line }
+            | Stmt::Continue { line }
+            | Stmt::Try { line, .. }
+            | Stmt::Assert { line, .. }
+            | Stmt::For { line, .. }
+            | Stmt::Import { line, .. }
+            | Stmt::BashDsl { line, .. }
+            | Stmt::Completed { line }
+            | Stmt::Error { line, .. }
+            | Stmt::AiGenerate { line, .. }
+            | Stmt::Return { line, .. }
+            | Stmt::ExprStmt { line, .. }
+            | Stmt::Switch { line, .. }
+            | Stmt::DoWhile { line, .. }
+            | Stmt::CFor { line, .. }
+            | Stmt::Match { line, .. } => *line,
+        }
+    }
 }
 
 /// One arm of a `match` statement.

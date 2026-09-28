@@ -25,5 +25,5 @@ fn plain_string_keeps_braces_and_escaped_quotes() {
 fn fstring_interpolates() {
     let parts = single_str(r#"print(f"a{x}b")"#);
     assert!(matches!(parts.as_slice(),
-        [StrPart::Lit(a), StrPart::Expr(e), StrPart::Lit(b)] if a == "a" && e == "x" && b == "b"));
+        [StrPart::Lit(a), StrPart::Expr { src, .. }, StrPart::Lit(b)] if a == "a" && src == "x" && b == "b"));
 }

@@ -83,7 +83,7 @@ pub fn abs(args: &[Value], line: usize, ctx: &Ctx) -> Result<Value, RuntimeError
         Value::Int(n) => n.checked_abs().map_or_else(|| Value::Float((*n as f64).abs()), Value::Int),
         Value::Float(f) => Value::Float(f.abs()),
         other => Value::Float(other.as_f64()
-            .ok_or_else(|| RuntimeError::new(400, line, format!("abs: not a number: {other:?}")))?
+            .ok_or_else(|| RuntimeError::new(400, line, format!("abs: not a number: {}", other.describe())))?
             .abs()),
     };
     if !ctx.capturing {
@@ -156,11 +156,11 @@ fn collect_numbers(args: &[Value], line: usize, what: &str) -> Result<Vec<f64>, 
         if let Value::List(items) = v {
             for it in items {
                 out.push(it.as_f64()
-                    .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: list item is not a number: {it:?}")))?);
+                    .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: list item is not a number: {}", it.describe())))?);
             }
         } else {
             out.push(v.as_f64()
-                .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: arg is not a number: {v:?}")))?);
+                .ok_or_else(|| RuntimeError::new(400, line, format!("{what}: arg is not a number: {}", v.describe())))?);
         }
     }
     Ok(out)
