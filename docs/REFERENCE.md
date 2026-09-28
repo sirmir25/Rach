@@ -375,7 +375,7 @@ Stage is `lex`, `parse`, or `runtime`. Lex and parse errors include the column a
 | 503  | Service unavailable (driver bring-up)            |
 
 ### 5.3 Strict mode
-`RACH_STRICT=1` makes `error N` abort and any runtime command failure terminate the script. Without it, errors are printed and execution continues — except `raise` and a failed `assert`, which always stop the script unless caught.
+`RACH_STRICT=1` makes `error N` abort and any runtime command failure terminate the script. Without it, errors are printed and execution continues — except `raise` and a failed `assert`, which always stop the script unless caught. Either way, a script with any failed command exits with code 1.
 
 ---
 
@@ -401,7 +401,7 @@ rach help
 | Code | When                       |
 |------|----------------------------|
 | 0    | Success                    |
-| 1    | Runtime error              |
+| 1    | Runtime error, or a command failed and was skipped (non-strict mode) |
 | 2    | Cannot read file           |
 | 3    | Lex error                  |
 | 4    | Parse error                |

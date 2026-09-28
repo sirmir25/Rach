@@ -56,6 +56,9 @@ pub struct Ctx {
     /// Current depth of nested user-function calls. Bounded by [`MAX_CALL_DEPTH`] so runaway
     /// recursion in a Rach program yields a diagnostic instead of overflowing the native stack.
     pub call_depth: usize,
+    /// Commands that failed outside `try` and were skipped (non-strict mode). A non-zero count
+    /// makes the script exit non-zero, so CI and cron still notice the failure.
+    pub skipped_errors: usize,
     pub source: String,
     pub script_path: String,
     pub log: LogState,
@@ -107,7 +110,8 @@ impl Ctx {
         Ok(())
     }
 
-    pub fn report_error(&self, code: i64, line: usize, message: &str) {
+    pub fn report_error(&mut self, code: i64, line: usize, message: &str) {
+        self.skipped_errors += 1;
         report_pretty("runtime", code, &self.script_path, line, 0, message, Some(&self.source));
     }
 }
@@ -222,6 +226,7 @@ pub fn make_ctx(strict: bool, source: String, script_path: String) -> Ctx {
         capturing: false,
         try_depth: 0,
         call_depth: 0,
+        skipped_errors: 0,
         source,
         script_path,
         log: LogState::default(),
@@ -306,6 +311,7 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
         capturing: false,
         try_depth: 0,
         call_depth: 0,
+        skipped_errors: 0,
         source: source.to_string(),
         script_path: script_path.to_string(),
         log: LogState::default(),
@@ -318,9 +324,18 @@ pub fn run(program: &Program, source: &str, script_path: &str) -> Result<(), Run
     ctx.wd.take();
 
     match result {
-        Ok(()) => Ok(()),
-        Err(e) if e.code == RETURN_SIGNAL_CODE => Ok(()),
+        Ok(()) => skipped_errors_summary(&ctx),
+        Err(e) if e.code == RETURN_SIGNAL_CODE => skipped_errors_summary(&ctx),
         Err(e) => Err(stray_loop_signal(e)),
+    }
+}
+
+/// Each skipped error was already printed where it happened; this only turns their count
+/// into a failing result for the exit code.
+fn skipped_errors_summary(ctx: &Ctx) -> Result<(), RuntimeError> {
+    match ctx.skipped_errors {
+        0 => Ok(()),
+        n => Err(RuntimeError::new(1, 0, format!("{n} command(s) failed and were skipped (set RACH_STRICT=1 to stop at the first)"))),
     }
 }
 
