@@ -1,0 +1,31 @@
+# ASCII / Unicode art on Rach's built-in raster canvas — no libraries.
+
+ascii_text("Rach", shadow=true)
+ascii_text("Привет!", style="half")
+ascii_text("braille: 2x4 dots per character", style="braille")
+
+ascii_bars({"Rust": 42, "Rach": 30, "Python": 18, "C": 7}, width=30)
+ascii_sparkline([1, 5, 22, 13, 5, 2, 8, 30, 12, 4])
+ascii_progress(67, width=24)
+
+ys = []
+for (set i = 0; i < 90; i++):
+    set y = sin(i / 9.0) * 10 + i / 12.0
+    ys = append(ys, y)
+ascii_plot(ys, width=45, height=8)
+
+ascii_tree({"rach": {"stdlib": ["encoding", "hash", "cipher", "modern", "ascii_art"], "version": "0.2"}}, root="project")
+ascii_circle(radius=10)
+ascii_mandelbrot(width=64, height=20)
+
+# Write a tiny grayscale image (PGM, plain text), then render it.
+pixels = []
+for (set y = 0; y < 16; y++):
+    for (set x = 0; x < 32; x++):
+        set d = sqrt((x - 16) ^ 2 + ((y - 8) * 2) ^ 2)
+        set v = int(255 - d * 16)
+        pixels = append(pixels, v < 0 ? 0 : v)
+body = join(pixels, " ")
+write("/tmp/rach_disc.pgm", f"P2 32 16 255\n{body}\n")
+ascii_image("/tmp/rach_disc.pgm", 32)
+del("/tmp/rach_disc.pgm")

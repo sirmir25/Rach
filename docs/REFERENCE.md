@@ -87,6 +87,7 @@ Inside the body:
 - `for <var> in <expr>:` block; `for k, v in <map>:` to destructure pairs.
 - `break`, `continue`.
 - `try: ... rescue [as <var>]: ...` — catch a runtime error, bind to `<var>` as `{ code, line, message }`.
+- `raise(message [, code])` — throw an error (default code 500, must be positive). `try` catches it; uncaught, it stops the script even without `RACH_STRICT`.
 - `return <expr>`.
 - `error <code> [string <line>]` — print a manual error.
 - `completed` — print the literal word `completed` (optional; commands print it themselves on success).
@@ -197,10 +198,19 @@ hex = native_crc32(content)
 | Command                   | Effect                                                 |
 |---------------------------|--------------------------------------------------------|
 | `run(cmd)` / `sh(cmd)`    | Run via `sh -c` (Win: `cmd /C`); print stdout/stderr   |
+| `exec(cmd, ...)`          | Run and return `{ code, ok, stdout, stderr }`          |
 | `install_package(name)`   | brew/apt-get/dnf/pacman/zypper/apk/winget/pkg          |
 | `reboot()` / `shutdown()` | Print intent only (no execution, for safety)           |
 
 `install_package` honours `RACH_DRY_RUN=1`.
+
+`run` fails on a non-zero exit; `exec` returns the outcome instead, so a script can branch on it. Kwargs: `quiet=true` (don't echo the command or its output), `check=true` (fail on non-zero exit, like `run`), `cwd="dir"`, `env={"KEY": "value"}` (added to the inherited environment), `input="text"` (fed to stdin).
+
+```
+r = exec("git diff --quiet", quiet=true)
+if not r.ok:
+    print(f"uncommitted changes (exit {r.code})")
+```
 
 ### 4.4 Control flow values
 
@@ -288,6 +298,53 @@ ai_generate(language="python", task="parse JSON from stdin")
 ```
 If `ANTHROPIC_API_KEY` is set, calls Claude (`claude-haiku-4-5-20251001` by default; override with `RACH_LLM_MODEL`). Otherwise falls back to a small set of canned templates.
 
+### 4.11 Canvas art, charts, images
+All draw on a raster canvas and render as `braille` (2×4 dots per cell), `half` (▀▄), blocks, or an `ascii`/`shade` grayscale ramp; a renderer's pixel aspect is corrected so shapes keep their proportions.
+
+| Command | Arguments (keyword unless positional) |
+|---|---|
+| `ascii_text(text)` | `style=block\|ascii\|half\|braille`, `scale=1..8`, `shadow=`, `char=` — 5×7 font, printable ASCII + Cyrillic |
+| `ascii_sparkline(list)` | numbers → ▁▂▃▄▅▆▇█ |
+| `ascii_bars(data, width=40)` | map, list, or list of `[label, value]`; values ≥ 0 |
+| `ascii_progress(value, total=100, width=30)` | |
+| `ascii_plot(list, width=60, height=12)` | braille line chart, ≥ 2 points |
+| `ascii_tree(map_or_list, root=".")` | |
+| `ascii_circle(radius=8)` | `fill=`, `style=braille\|half\|ascii\|shade`, `char=` |
+| `ascii_mandelbrot(width=78, height=30, iterations=80)` | `style=`, `x=-0.5`, `y=0`, `zoom=1` |
+| `ascii_image(path, width=80)` | `style=`, `invert=`, `dither=` — BMP (1/4/8-bit incl. RLE, 16/24/32-bit), PBM/PGM/PPM |
+
+### 4.12 Encoding
+`base64_*` (`url=true` for base64url), `base32_*`, `base58_*`, `ascii85_*`, `hex_*`, `binary_*`, `url_*` (`form=true` maps `+`→space) — each with `_encode(text)` / `_decode(text)`.
+
+Byte convention for every encoding/hash/cipher command: text is UTF-8; `input="hex"` supplies raw bytes; `output="hex"` returns raw bytes (required when a result isn't valid UTF-8 — otherwise it's an error, never mangled text).
+
+### 4.13 Hashing
+`md5`, `sha1`, `sha256`, `sha512` (`format="hex"\|"base64"`); `hmac(msg, key, algo=)`; `pbkdf2(password, salt, iterations=100000, length=32, algo=)`; checksums `crc32`, `adler32`, `fnv1a(bits=32\|64)` (`format="int"` for the number). MD5 and SHA-1 are collision-broken — checksums only.
+
+### 4.14 Classical ciphers and cryptanalysis
+Substitution ciphers take `alphabet="en"` (default) or `"ru"` (33 letters, Ё included); case is kept; other characters pass through without consuming key letters.
+
+`caesar_encrypt/decrypt(text, shift=3)`, `rot13`, `rot47`, `atbash`, `affine_encrypt/decrypt(text, a, b)`, `vigenere_encrypt/decrypt(text, key)`, `beaufort(text, key)` (self-inverse), `autokey_encrypt/decrypt(text, key)`, `playfair_encrypt/decrypt(text, key)`, `rail_fence_encrypt/decrypt(text, rails=3)`, `columnar_encrypt/decrypt(text, key)`, `polybius_encrypt/decrypt(text, key="")`, `bifid_encrypt/decrypt(text, key)`, `adfgvx_encrypt/decrypt(text, square_key, transposition_key)`, `bacon_encrypt/decrypt`, `morse_encode/decode` (`alphabet="ru"` for Russian Morse), `enigma(text, rotors=, reflector=, rings=, positions=, plugboard=)`.
+
+`vigenere_crack(text, max_key_length=20)` → `{key, key_length, plaintext}` (index of coincidence for the length, chi-squared per key letter; wants ~40+ letters per key letter), `caesar_crack(text)` → `{shift, plaintext}`, `index_of_coincidence(text)`, `letter_frequencies(text)`.
+
+### 4.15 Modern ciphers
+| Command | Notes |
+|---|---|
+| `encrypt(text, password, iterations=200000)` / `decrypt(token, password)` | PBKDF2-HMAC-SHA256 + ChaCha20-Poly1305; token `rach1$<iterations>$<base64url>`; wrong password → error |
+| `aes_encrypt/decrypt(text, key, mode="cbc"\|"ctr"\|"ecb", iv=)` | AES-128/192/256 by key size |
+| `chacha20_poly1305_encrypt/decrypt(text, key, nonce=, aad=)` | RFC 8439 AEAD |
+| `chacha20_encrypt/decrypt(text, key, nonce=, counter=1)`, `poly1305(msg, key_hex)` | RFC 8439 primitives |
+| `xor_encrypt/decrypt`, `rc4_encrypt/decrypt` | historical; broken |
+| `random_bytes(n)` | OS randomness, hex |
+
+Keys: 32/48/64 hex digits are raw key bytes; anything else is SHA-256'd as a passphrase. Omitted `iv=`/`nonce=` are random and prepended to the hex ciphertext; `*_decrypt` reads them back. Implementations pass the official vectors but are unaudited and AES is not constant-time.
+
+### 4.16 Conversions
+`int(x)` (truncates toward zero, parses strings, errors when out of range), `float(x)`, `str(x)`, `bool(x)`, `type_of(x)` → `"int"`, `"float"`, `"str"`, `"bool"`, `"list"`, `"map"`, `"fn"`, `"nil"`, or a struct's name.
+
+A user-defined function shadows a stdlib command of the same name.
+
 ---
 
 ## 5. Errors
@@ -318,7 +375,7 @@ Stage is `lex`, `parse`, or `runtime`. Lex and parse errors include the column a
 | 503  | Service unavailable (driver bring-up)            |
 
 ### 5.3 Strict mode
-`RACH_STRICT=1` makes `error N` abort and any runtime command failure terminate the script. Without it, errors are printed and execution continues.
+`RACH_STRICT=1` makes `error N` abort and any runtime command failure terminate the script. Without it, errors are printed and execution continues — except `raise` and a failed `assert`, which always stop the script unless caught. Either way, a script with any failed command exits with code 1.
 
 ---
 
@@ -344,7 +401,7 @@ rach help
 | Code | When                       |
 |------|----------------------------|
 | 0    | Success                    |
-| 1    | Runtime error              |
+| 1    | Runtime error, or a command failed and was skipped (non-strict mode) |
 | 2    | Cannot read file           |
 | 3    | Lex error                  |
 | 4    | Parse error                |

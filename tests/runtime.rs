@@ -41,3 +41,17 @@ fn negating_i64_min_does_not_panic() {
     let src = "x = 100000000000000 * -100000000000000\ny = -x\n";
     run(src).expect("negating i64::MIN must promote to float, not panic");
 }
+
+/// Without `RACH_STRICT` a failing command is printed and skipped, but the run as a whole
+/// must still fail — otherwise CI and cron see a broken script as a success.
+#[test]
+fn skipped_command_failure_fails_the_run() {
+    let (code, msg) = run("read(\"/nonexistent/rach-test\")\nx = 1\n").expect_err("a skipped failure must fail the run");
+    assert_eq!(code, 1);
+    assert!(msg.contains("1 command(s) failed"), "got: {msg}");
+}
+
+#[test]
+fn caught_failure_does_not_fail_the_run() {
+    run("try:\n    read(\"/nonexistent/rach-test\")\nrescue:\n    x = 1\n").expect("a rescued failure is handled");
+}

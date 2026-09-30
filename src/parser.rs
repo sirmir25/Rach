@@ -32,10 +32,14 @@ struct P {
     tokens: Vec<Token>,
     pos: usize,
     depth: usize,
+    /// Line of the last function-closing `end` that sat deeper than its `rach` header —
+    /// the usual sign that it was meant to close an `if`/`for`/`while` block instead.
+    /// Only used to explain a later stray `end`.
+    misplaced_end: Option<(usize, String)>,
 }
 
 impl P {
-    fn new(tokens: Vec<Token>) -> Self { Self { tokens, pos: 0, depth: 0 } }
+    fn new(tokens: Vec<Token>) -> Self { Self { tokens, pos: 0, depth: 0, misplaced_end: None } }
 
     /// Enter one level of recursive descent. Errors (rather than overflowing the stack) when
     /// nesting exceeds [`MAX_PARSE_DEPTH`]. Pair every successful call with [`P::leave`].
@@ -50,6 +54,13 @@ impl P {
     fn leave(&mut self) { self.depth = self.depth.saturating_sub(1); }
     fn peek(&self) -> Option<&Token> { self.tokens.get(self.pos) }
     fn peek_at(&self, off: usize) -> Option<&Token> { self.tokens.get(self.pos + off) }
+    /// The current token, or the last one once input is exhausted — so an "unexpected end of
+    /// input" error still points at the end of the file instead of losing its location.
+    fn here(&self) -> Option<&Token> { self.peek().or_else(|| self.tokens.last()) }
+    /// "found `x`" / "found end of input" — the tail of an `expected …` diagnostic.
+    fn found(&self) -> String {
+        self.peek().map_or_else(|| "found end of input".into(), |t| format!("found {}", t.tok))
+    }
     fn next(&mut self) -> Option<Token> {
         let t = self.tokens.get(self.pos).cloned();
         if t.is_some() { self.pos += 1; }
@@ -64,16 +75,13 @@ impl P {
         match self.peek().map(|t| &t.tok) {
             Some(Tok::Newline | Tok::Semicolon) => { self.pos += 1; Ok(()) }
             None => Ok(()),
-            _ => Err(ParseError::at(self.peek(), "expected end of line")),
+            _ => Err(ParseError::at(self.peek(), format!("expected end of line, {}", self.found()))),
         }
     }
     fn expect_word(&mut self, w: &str) -> Result<Token, ParseError> {
         match self.peek().cloned() {
-            Some(t) => match &t.tok {
-                Tok::Word(s) if s == w => { self.pos += 1; Ok(t) }
-                _ => Err(ParseError::at(Some(&t), format!("expected `{w}`"))),
-            },
-            None => Err(ParseError::at(None, format!("expected `{w}`"))),
+            Some(t) if matches!(&t.tok, Tok::Word(s) if s == w) => { self.pos += 1; Ok(t) }
+            _ => Err(ParseError::at(self.here(), format!("expected `{w}`, {}", self.found()))),
         }
     }
     fn expect_tok(&mut self, expected: &Tok, label: &str) -> Result<Token, ParseError> {
@@ -81,7 +89,7 @@ impl P {
             Some(t) if std::mem::discriminant(&t.tok) == std::mem::discriminant(expected) => {
                 self.pos += 1; Ok(t)
             }
-            other => Err(ParseError::at(other.as_ref(), format!("expected {label}"))),
+            _ => Err(ParseError::at(self.here(), format!("expected {label}, {}", self.found()))),
         }
     }
 }
@@ -197,11 +205,22 @@ fn parse_impl(p: &mut P) -> Result<ImplBlock, ParseError> {
             Some(Tok::Word(w)) if w == "rach" => {
                 methods.push(parse_function(p)?);
             }
-            _ => return Err(ParseError::at(p.peek(), "expected a method (`rach ...`) or `end` inside `impl` block")),
+            None => return Err(ParseError::at(Some(&header), format!("`impl {name}` is never closed: add `end` after its methods"))),
+            _ => return Err(ParseError::at(p.peek(), format!("expected a method (`rach ...`) or `end` inside `impl` block, {}", p.found()))),
         }
     }
     let _ = p.expect_newline();
     Ok(ImplBlock { struct_name: name, methods, line: header.line })
+}
+
+/// Consume the `end` that closes a function or lambda opened by `header`. Running out of
+/// input points back at the header — the place to fix — rather than at the end of the file.
+fn expect_block_end(p: &mut P, header: &Token, what: &str) -> Result<Token, ParseError> {
+    match p.peek().cloned() {
+        Some(t) if matches!(&t.tok, Tok::Word(w) if w == "end") => { p.next(); Ok(t) }
+        Some(_) => Err(ParseError::at(p.peek(), format!("expected `end` to close {what}, {}", p.found()))),
+        None => Err(ParseError::at(Some(header), format!("{what} is never closed: add `end` after its body"))),
+    }
 }
 
 fn expect_end_marker(p: &mut P) -> Result<(), ParseError> {
@@ -278,11 +297,8 @@ fn parse_function(p: &mut P) -> Result<Function, ParseError> {
         p.next(); // `:`
         p.expect_newline()?;
         let body = parse_block(p, 0)?;
-        let end_tok = p.next().ok_or_else(|| ParseError::at(None, "expected `end` to close function"))?;
-        match &end_tok.tok {
-            Tok::Word(w) if w == "end" => {}
-            _ => return Err(ParseError::at(Some(&end_tok), "expected `end` to close function")),
-        }
+        let end_tok = expect_block_end(p, &header, &format!("function `{name}`"))?;
+        p.misplaced_end = (end_tok.col > header.col).then(|| (end_tok.line, name.clone()));
         let _ = p.expect_newline();
         return Ok(Function { name, params, defaults, body, line: header.line });
     }
@@ -507,14 +523,28 @@ fn parse_match_pattern_atom(p: &mut P) -> Result<MatchPattern, ParseError> {
 }
 
 fn parse_stmt(p: &mut P) -> Result<Stmt, ParseError> {
-    let head = p.peek().cloned().ok_or_else(|| ParseError::at(None, "unexpected end of input"))?;
+    let head = p.peek().cloned().ok_or_else(|| ParseError::at(p.here(), "unexpected end of input"))?;
     let head_col = head.col;
     let head_line = head.line;
 
     let word = match &head.tok {
         Tok::Word(w) => w.clone(),
-        _ => return Err(ParseError::at(Some(&head), format!("unexpected token {:?}", head.tok))),
+        _ => return Err(ParseError::at(Some(&head), format!("expected a statement, found {}", head.tok))),
     };
+
+    // Blocks stop at `end` without consuming it, so one that reaches a statement position
+    // has nothing left to close.
+    if word == "end" {
+        let why = match &p.misplaced_end {
+            Some((line, func)) => format!(
+                "the `end` on line {line} already closed function `{func}` \
+                 (`if`/`for`/`while` blocks close by dedenting, not with `end`)"
+            ),
+            None => "`end` only closes `rach` functions, lambdas and `impl` blocks; \
+                     `if`/`for`/`while` blocks close by dedenting".into(),
+        };
+        return Err(ParseError::at(Some(&head), format!("unexpected `end`: {why}")));
+    }
 
     if word == "completed" {
         p.next();
@@ -1070,7 +1100,7 @@ fn parse_call_segments(p: &mut P) -> Result<Vec<CallSegment>, ParseError> {
 fn collect_word_run(p: &mut P) -> Vec<String> {
     let mut out = Vec::new();
     while let Some(Tok::Word(w)) = p.peek().map(|t| t.tok.clone()) {
-        if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Equals)) {
+        if is_infix_keyword(&w) || matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Equals)) {
             break;
         }
         p.next();
@@ -1365,8 +1395,8 @@ fn parse_postfix_chain(p: &mut P, mut target: Expr) -> Result<Expr, ParseError> 
 }
 
 fn parse_lambda(p: &mut P) -> Result<Expr, ParseError> {
-    let header_line = p.peek().map_or(0, |t| t.line);
-    p.expect_word("fn")?;
+    let header = p.expect_word("fn")?;
+    let header_line = header.line;
     p.expect_tok(&Tok::LParen, "`(`")?;
     let mut params: Vec<String> = Vec::new();
     loop {
@@ -1374,7 +1404,7 @@ fn parse_lambda(p: &mut P) -> Result<Expr, ParseError> {
             Some(Tok::RParen) => { p.next(); break; }
             Some(Tok::Comma) => { p.next(); continue; }
             Some(Tok::Word(w)) => { p.next(); params.push(w); }
-            _ => return Err(ParseError::at(p.peek(), "expected param name or `)`")),
+            _ => return Err(ParseError::at(p.here(), format!("expected param name or `)`, {}", p.found()))),
         }
     }
     // Two body forms:
@@ -1390,20 +1420,16 @@ fn parse_lambda(p: &mut P) -> Result<Expr, ParseError> {
         p.next();
         p.expect_newline()?;
         let body = parse_block(p, 0)?;
-        let end_tok = p.next().ok_or_else(|| ParseError::at(None, "expected `end` to close lambda"))?;
-        match &end_tok.tok {
-            Tok::Word(w) if w == "end" => {}
-            _ => return Err(ParseError::at(Some(&end_tok), "expected `end` to close lambda")),
-        }
+        expect_block_end(p, &header, "lambda")?;
         return Ok(Expr::Lambda { params, body, line: header_line });
     }
-    Err(ParseError::at(p.peek(), "expected `->` or `:` after lambda parameters"))
+    Err(ParseError::at(p.here(), format!("expected `->` or `:` after lambda parameters, {}", p.found())))
 }
 
 fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
-    let head = p.peek().cloned().ok_or_else(|| ParseError::at(None, "expected expression"))?;
+    let head = p.peek().cloned().ok_or_else(|| ParseError::at(p.here(), "expected an expression, found end of input"))?;
     match head.tok.clone() {
-        Tok::Str(parts) => { p.next(); Ok(build_string_expr(parts, head.line)?) }
+        Tok::Str(parts) => { p.next(); Ok(build_string_expr(parts, head.line, p.depth)?) }
         Tok::Int(n) => { p.next(); Ok(Expr::Lit(Value::Int(n))) }
         Tok::Float(f) => { p.next(); Ok(Expr::Lit(Value::Float(f))) }
         Tok::LBrace => {
@@ -1526,7 +1552,7 @@ fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
                 return Ok(Expr::FnCall { name: w, args, line: head.line });
             }
 
-            if matches!(p.peek_at(1).map(|t| t.tok.clone()), Some(Tok::Word(_))) {
+            if matches!(p.peek_at(1).map(|t| &t.tok), Some(Tok::Word(next)) if !is_infix_keyword(next)) {
                 let line = head.line;
                 let segments = parse_call_segments(p)?;
                 return Ok(Expr::Call { segments, line });
@@ -1535,15 +1561,22 @@ fn parse_atom(p: &mut P) -> Result<Expr, ParseError> {
             p.next();
             Ok(Expr::Var(w))
         }
-        _ => Err(ParseError::at(Some(&head), format!("unexpected token in expression: {:?}", head.tok))),
+        _ => Err(ParseError::at(Some(&head), format!("expected an expression, found {}", head.tok))),
     }
+}
+
+/// `and`/`or` sit between two operands, so they never belong to a multi-word command name:
+/// `a and b` is a condition, and `exists(x) and exists(y)` is two calls, not one command
+/// whose second segment is `and exists(y)`.
+fn is_infix_keyword(word: &str) -> bool {
+    matches!(word, "and" | "or")
 }
 
 /// Convert lexer's `Tok::Str(parts)` into either a plain string literal (when
 /// no `{...}` interpolation is used) or an `InterpStr` expression. Embedded
 /// expression sources are re-tokenized + re-parsed here.
-fn build_string_expr(parts: Vec<StrPart>, line: usize) -> Result<Expr, ParseError> {
-    let has_interp = parts.iter().any(|p| matches!(p, StrPart::Expr(_)));
+fn build_string_expr(parts: Vec<StrPart>, line: usize, depth: usize) -> Result<Expr, ParseError> {
+    let has_interp = parts.iter().any(|p| matches!(p, StrPart::Expr { .. }));
     if !has_interp {
         let s: String = parts.into_iter().filter_map(|p| if let StrPart::Lit(s) = p { Some(s) } else { None }).collect::<String>();
         return Ok(Expr::Lit(Value::Str(s)));
@@ -1552,15 +1585,35 @@ fn build_string_expr(parts: Vec<StrPart>, line: usize) -> Result<Expr, ParseErro
     for part in parts {
         match part {
             StrPart::Lit(s) => out.push(InterpPart::Lit(s)),
-            StrPart::Expr(src) => {
-                let tokens = crate::lexer::tokenize(&src)
-                    .map_err(|e| ParseError { line, col: 0, message: format!("interp: lex error: {}", e.message) })?;
-                let mut sub = P::new(tokens);
-                sub.skip_newlines();
-                let e = parse_expr(&mut sub)?;
-                out.push(InterpPart::Expr(e));
+            StrPart::Expr { src, line: at_line, col: at_col } => {
+                out.push(InterpPart::Expr(parse_interpolation(&src, at_line, at_col, depth)?));
             }
         }
     }
     Ok(Expr::InterpStr { parts: out, line })
+}
+
+/// Parse the source of one f-string `{…}` hole that starts at `line`:`col` in the file. Its
+/// tokens are shifted to that spot, so a mistake inside the braces is reported where it is
+/// instead of at "line 1", and it shares the outer parser's nesting budget.
+fn parse_interpolation(src: &str, line: usize, col: usize, depth: usize) -> Result<Expr, ParseError> {
+    let place = |l: usize, c: usize| if l == 1 { (line, col + c - 1) } else { (line + l - 1, c) };
+    let mut tokens = crate::lexer::tokenize(src).map_err(|e| {
+        let (line, col) = place(e.line, e.col);
+        ParseError { line, col, message: format!("in f-string: {}", e.message) }
+    })?;
+    for t in &mut tokens {
+        (t.line, t.col) = place(t.line, t.col);
+    }
+    // `tokenize` ends its input with a newline token, which here sits exactly on the closing
+    // `}` — so name it that, and "found end of line" reads as "found `}`".
+    if let Some(last) = tokens.last_mut() {
+        last.tok = Tok::RBrace;
+    }
+    let mut sub = P::new(tokens);
+    sub.depth = depth;
+    sub.skip_newlines();
+    let expr = parse_expr(&mut sub)?;
+    sub.expect_tok(&Tok::RBrace, "`}` to close the f-string expression")?;
+    Ok(expr)
 }

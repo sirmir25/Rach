@@ -19,6 +19,9 @@ Rach is a small scripting language focused on automation: system commands, files
   - [Browser (WebDriver)](#browser-webdriver)
   - [bash DSL](#bash-dsl)
   - [ai_generate](#ai_generate)
+  - [Canvas art, charts and images](#canvas-art-charts-and-images)
+  - [Encoding, hashing and ciphers](#encoding-hashing-and-ciphers)
+  - [Conversions](#conversions)
 - [Flow control: `if linux/macos/windows`](#flow-control-if-linuxmacoswindows)
 - [Error convention](#error-convention)
 - [Environment variables](#environment-variables)
@@ -175,7 +178,7 @@ rach square(x):
 end
 ```
 
-Call them like commands the parser doesn't already know: `y = square(7)`.
+Call them like any command: `y = square(7)`. A function you define shadows a stdlib command of the same name (as in Python), so adding commands to the stdlib can never break an existing script.
 
 Default parameters use the C++ `name = expr` syntax:
 
@@ -439,6 +442,80 @@ ascii table(headers="Name,Age", rows="Ivan,25;Maria,30") # formatted table
 ```
 
 Border styles for `ascii box`: `single` (default), `double`, `bold`, `rounded`, `ascii`, `stars`, `hash`.
+
+#### Canvas art, charts and images
+
+Everything below draws on a built-in raster canvas and renders it as Unicode braille (2×4 dots per character — the highest resolution a terminal cell can show), half blocks `▀▄`, solid blocks, or a grayscale character ramp. No libraries.
+
+```
+ascii_text("Rach", shadow=true)                  # 5x7 bitmap font: all printable ASCII + Cyrillic
+ascii_text("Привет!", style="half")              # styles: block (default), ascii, half, braille; scale=1..8, char="*"
+ascii_sparkline([1, 5, 22, 13, 5, 2, 8, 30])     # ▁▂▆▄▂▁▃█
+ascii_bars({"Rust": 42, "Rach": 30}, width=30)   # map, list, or list of [label, value]; 1/8-cell precision
+ascii_progress(67, 100, width=24)                # [████████████████▏░░░░░░░]  67%
+ascii_plot(values, width=60, height=12)          # braille line chart with a min/max axis
+ascii_tree({"a": [1, 2], "b": {"c": true}})      # ├── └── tree of nested maps/lists
+ascii_circle(radius=10, fill=false)              # aspect-corrected: round in every style
+ascii_mandelbrot(width=78, height=30)            # smooth escape-time; style=ascii|shade|braille|half, x=, y=, zoom=
+ascii_image("photo.bmp", 80, style="braille")    # BMP / PBM / PGM / PPM; invert=true for light terminals
+```
+
+`ascii_image` decodes BMP (1/4/8-bit palettes incl. RLE, 16/24/32-bit) and Netpbm P1–P6 itself; for PNG/JPEG convert first (`magick photo.png photo.bmp`). Bright pixels become dense characters, which reads right on a dark terminal. See `examples/ascii_art.rach`.
+
+### Encoding, hashing and ciphers
+
+All hand-written — no crates. Text goes in as UTF-8; pass `input="hex"` to feed raw bytes, and `output="hex"` to get raw bytes back when they aren't valid text.
+
+```
+base64_encode("hi")  base64_decode(s)            # also url=true; base32, base58, ascii85, hex, binary, url (_encode/_decode)
+sha256("abc")                                    # md5, sha1, sha256, sha512; format="base64"
+hmac("msg", "key", algo="sha256")                # RFC 2104
+pbkdf2("password", "salt", iterations=100000, length=32)
+crc32("x")  adler32("x")  fnv1a("x", bits=64)    # checksums; format="int" for the number
+```
+
+Classical ciphers (`alphabet="ru"` works for the substitution ones and Morse):
+
+| Cipher | Commands |
+|---|---|
+| Caesar, ROT13, ROT47, Atbash, affine | `caesar_encrypt/decrypt(text, shift)`, `rot13`, `rot47`, `atbash`, `affine_encrypt/decrypt(text, a, b)` |
+| Vigenère family | `vigenere_encrypt/decrypt(text, key)`, `beaufort(text, key)`, `autokey_encrypt/decrypt` |
+| Playfair (Wheatstone, 1854) | `playfair_encrypt/decrypt(text, key)` |
+| Transposition | `rail_fence_encrypt/decrypt(text, rails)`, `columnar_encrypt/decrypt(text, key)` |
+| Polybius, Bifid, ADFGVX (1918) | `polybius_*`, `bifid_*(text, key)`, `adfgvx_*(text, square_key, transposition_key)` |
+| Bacon (1605), Morse | `bacon_encrypt/decrypt`, `morse_encode/decode` |
+| Enigma I / M3 | `enigma(text, rotors="I II III", reflector="B", rings="AAA", positions="AAA", plugboard="AB CD")` |
+
+Breaking them, the way Charles Babbage — Ada Lovelace's collaborator on the Analytical Engine — broke Vigenère around 1854:
+
+```
+r = vigenere_crack(ciphertext)          # {"key": ..., "key_length": ..., "plaintext": ...}
+r = caesar_crack(ciphertext)            # {"shift": ..., "plaintext": ...}
+index_of_coincidence(text)              # ≈0.066 for English, ≈0.038 for random letters
+letter_frequencies(text)
+```
+
+Frequency analysis needs text to work on: aim for 40+ letters per key letter.
+
+Modern ciphers:
+
+```
+token = encrypt("secret", "password")   # PBKDF2-SHA256 + ChaCha20-Poly1305, random salt & nonce
+decrypt(token, "password")              # wrong password or tampering → error, never garbage
+aes_encrypt(text, key, mode="cbc")      # AES-128/192/256; modes cbc (PKCS#7), ctr, ecb; random IV prepended
+chacha20_poly1305_encrypt(text, key, aad="header")   # RFC 8439 AEAD
+chacha20_encrypt(...)  poly1305(msg, key_hex)  random_bytes(32)
+xor_encrypt/decrypt  rc4_encrypt/decrypt              # historical — broken, don't rely on them
+```
+
+Keys given as 32/48/64 hex digits are used raw; anything else is a passphrase hashed with SHA-256 (use `encrypt` for human passwords — it uses a slow, salted KDF). Everything passes the official test vectors (FIPS-197, SP 800-38A, RFC 8439, …), but it's unaudited and the AES is table-based, so not constant-time: great for learning, CTFs and interop, not a substitute for a reviewed crypto library when real attackers are involved. See `examples/crypto.rach`.
+
+### Conversions
+
+```
+int(3.9)        # 3   (truncates; parses "42" / "-7.5"; errors if out of range)
+float("2.5")    str(42)    bool([])    type_of(x)   # "int", "float", "str", "list", "map", "fn", "nil", or a struct's name
+```
 
 ---
 

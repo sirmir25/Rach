@@ -53,14 +53,70 @@ pub enum Tok {
     DotDotEq,
 }
 
+impl std::fmt::Display for Tok {
+    /// How a token reads in a diagnostic: `found {tok}` → "found `)`", "found end of line".
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sym = match self {
+            Tok::Word(w) => return write!(f, "`{w}`"),
+            Tok::Str(_) => return f.write_str("a string"),
+            Tok::Int(n) => return write!(f, "`{n}`"),
+            Tok::Float(x) => return write!(f, "`{x}`"),
+            Tok::Newline => return f.write_str("end of line"),
+            Tok::LParen => "(",
+            Tok::RParen => ")",
+            Tok::LBracket => "[",
+            Tok::RBracket => "]",
+            Tok::LBrace => "{",
+            Tok::RBrace => "}",
+            Tok::Comma => ",",
+            Tok::Equals => "=",
+            Tok::Colon => ":",
+            Tok::Semicolon => ";",
+            Tok::Dot => ".",
+            Tok::Plus => "+",
+            Tok::Minus => "-",
+            Tok::Star => "*",
+            Tok::Slash => "/",
+            Tok::Percent => "%",
+            Tok::Caret => "^",
+            Tok::EqEq => "==",
+            Tok::BangEq => "!=",
+            Tok::Lt => "<",
+            Tok::Gt => ">",
+            Tok::LtEq => "<=",
+            Tok::GtEq => ">=",
+            Tok::LtLt => "<<",
+            Tok::GtGt => ">>",
+            Tok::PlusEq => "+=",
+            Tok::MinusEq => "-=",
+            Tok::StarEq => "*=",
+            Tok::SlashEq => "/=",
+            Tok::PercentEq => "%=",
+            Tok::PlusPlus => "++",
+            Tok::MinusMinus => "--",
+            Tok::Question => "?",
+            Tok::Amp => "&",
+            Tok::Pipe => "|",
+            Tok::Tilde => "~",
+            Tok::CaretCaret => "^^",
+            Tok::ColonColon => "::",
+            Tok::Arrow => "->",
+            Tok::DotDot => "..",
+            Tok::DotDotEq => "..=",
+        };
+        write!(f, "`{sym}`")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum StrPart {
     /// Literal text (already unescaped).
     Lit(String),
     /// Raw source for an interpolated expression (e.g. `name + 1`).
     /// We store the raw text and re-tokenize it later — that keeps the
-    /// lexer state machine simple.
-    Expr(String),
+    /// lexer state machine simple. `line`/`col` locate the first character of
+    /// `src` in the file, so errors inside it can point at the right spot.
+    Expr { src: String, line: usize, col: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -239,6 +295,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
                     if !buf.is_empty() { parts.push(StrPart::Lit(std::mem::take(&mut buf))); }
                     i += 1;
                     col += 1;
+                    let (expr_line, expr_col) = (line, col);
                     let mut depth = 1usize;
                     let mut expr = String::new();
                     while i < chars.len() && depth > 0 {
@@ -254,7 +311,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
                     }
                     i += 1; // consume `}`
                     col += 1;
-                    parts.push(StrPart::Expr(expr));
+                    parts.push(StrPart::Expr { src: expr, line: expr_line, col: expr_col });
                     continue;
                 }
                 if chars[i] == '\n' {

@@ -1,13 +1,23 @@
 pub mod ai;
+pub mod args;
 pub mod ascii;
+pub mod ascii_art;
 pub mod bash;
+pub mod canvas;
+pub mod cipher;
 pub mod collections;
+pub mod convert;
 pub mod drivers;
+pub mod encoding;
+pub mod enigma;
+pub mod hash;
 pub mod http;
+pub mod image;
 pub mod io;
 pub mod json;
 pub mod logging;
 pub mod math;
+pub mod modern;
 pub mod native;
 pub mod os;
 pub mod system;
@@ -27,7 +37,7 @@ const KNOWN: &[&str] = &[
     "read", "write", "exists", "del", "run", "sh", "rm",
     // system / os
     "reboot", "shutdown",
-    "run_command", "install_package",
+    "run_command", "install_package", "exec", "raise",
     "create_file", "read_file", "edit_file", "delete_file", "check_if_exists",
     // web / browser
     "open_in_browser", "open_in_firefox", "open_in_chrome", "open_in_edge", "open_in_safari",
@@ -39,7 +49,9 @@ const KNOWN: &[&str] = &[
     "execute_js", "download_file", "upload_file",
     // ascii art
     "ascii_banner", "ascii_box", "ascii_pyramid", "ascii_diamond",
-    "ascii_border", "ascii_mirror", "ascii_table",
+    "ascii_border", "ascii_mirror", "ascii_table", "ascii_text",
+    "ascii_sparkline", "ascii_bars", "ascii_progress", "ascii_plot",
+    "ascii_tree", "ascii_mandelbrot", "ascii_circle", "ascii_image",
     // native (C / C++)
     "native_crc32", "native_base64", "native_sort_ints", "native_reverse",
     "run_c", "run_cpp",
@@ -64,12 +76,35 @@ const KNOWN: &[&str] = &[
     "env_get", "env_set",
     // io
     "input",
+    // conversions
+    "int", "float", "str", "bool", "type_of",
     // time
     "now", "now_ms", "sleep_ms", "format_time",
     // json
     "json_parse", "json_stringify",
     // http
     "http_get", "http_post",
+    // encoding
+    "base64_encode", "base64_decode", "base32_encode", "base32_decode",
+    "base58_encode", "base58_decode", "ascii85_encode", "ascii85_decode",
+    "hex_encode", "hex_decode", "binary_encode", "binary_decode",
+    "url_encode", "url_decode",
+    // hashing
+    "md5", "sha1", "sha256", "sha512", "crc32", "adler32", "fnv1a", "hmac", "pbkdf2",
+    // classical ciphers
+    "caesar_encrypt", "caesar_decrypt", "rot13", "rot47", "atbash",
+    "affine_encrypt", "affine_decrypt", "vigenere_encrypt", "vigenere_decrypt",
+    "beaufort", "autokey_encrypt", "autokey_decrypt",
+    "playfair_encrypt", "playfair_decrypt", "rail_fence_encrypt", "rail_fence_decrypt",
+    "columnar_encrypt", "columnar_decrypt", "polybius_encrypt", "polybius_decrypt",
+    "bifid_encrypt", "bifid_decrypt", "adfgvx_encrypt", "adfgvx_decrypt",
+    "bacon_encrypt", "bacon_decrypt", "morse_encode", "morse_decode",
+    "enigma", "vigenere_crack", "caesar_crack", "index_of_coincidence", "letter_frequencies",
+    // modern ciphers
+    "xor_encrypt", "xor_decrypt", "rc4_encrypt", "rc4_decrypt", "aes_encrypt", "aes_decrypt",
+    "chacha20_encrypt", "chacha20_decrypt", "poly1305",
+    "chacha20_poly1305_encrypt", "chacha20_poly1305_decrypt",
+    "encrypt", "decrypt", "random_bytes",
 ];
 
 /// Single-word match — used by parser to decide if `name(...)` is a known
@@ -181,6 +216,8 @@ pub fn dispatch(
         "reboot" => system::reboot(line),
         "shutdown" => system::shutdown(line),
         "run_command" => system::run_command(positional, line),
+        "exec" => system::exec(positional, kwargs, line),
+        "raise" => raise(positional, kwargs, line),
         "install_package" => system::install_package(positional, line, ctx),
         "create_file" => system::create_file(positional, line),
         "read_file" => system::read_file(positional, line, ctx.capturing),
@@ -218,6 +255,15 @@ pub fn dispatch(
         "ascii_border"  => ascii::border(positional, kwargs, line),
         "ascii_mirror"  => ascii::mirror(positional, line),
         "ascii_table"   => ascii::table(positional, kwargs, line),
+        "ascii_text"    => ascii_art::ascii_text(positional, kwargs, line, ctx),
+        "ascii_sparkline" => ascii_art::ascii_sparkline(positional, kwargs, line, ctx),
+        "ascii_bars"      => ascii_art::ascii_bars(positional, kwargs, line, ctx),
+        "ascii_progress"  => ascii_art::ascii_progress(positional, kwargs, line, ctx),
+        "ascii_plot"      => ascii_art::ascii_plot(positional, kwargs, line, ctx),
+        "ascii_tree"       => ascii_art::ascii_tree(positional, kwargs, line, ctx),
+        "ascii_mandelbrot" => ascii_art::ascii_mandelbrot(positional, kwargs, line, ctx),
+        "ascii_circle"     => ascii_art::ascii_circle(positional, kwargs, line, ctx),
+        "ascii_image"      => ascii_art::ascii_image(positional, kwargs, line, ctx),
 
         // ---- native (C / C++) ----
         "native_crc32"     => native::native_crc32(positional, line, ctx),
@@ -310,6 +356,13 @@ pub fn dispatch(
         // ---- io ----
         "input"      => io::input(positional, line, ctx),
 
+        // ---- conversions ----
+        "int"     => convert::int(positional, kwargs, line, ctx),
+        "float"   => convert::float(positional, kwargs, line, ctx),
+        "str"     => convert::str(positional, kwargs, line, ctx),
+        "bool"    => convert::bool(positional, kwargs, line, ctx),
+        "type_of" => convert::type_of(positional, kwargs, line, ctx),
+
         // ---- time ----
         "now"         => time::now(positional, line, ctx),
         "now_ms"      => time::now_ms(positional, line, ctx),
@@ -324,6 +377,95 @@ pub fn dispatch(
         "http_get"  => http::http_get(positional, line, ctx),
         "http_post" => http::http_post(positional, line, ctx),
 
+        // ---- encoding ----
+        "base64_encode"  => encoding::base64_encode(positional, kwargs, line, ctx),
+        "base64_decode"  => encoding::base64_decode(positional, kwargs, line, ctx),
+        "base32_encode"  => encoding::base32_encode(positional, kwargs, line, ctx),
+        "base32_decode"  => encoding::base32_decode(positional, kwargs, line, ctx),
+        "base58_encode"  => encoding::base58_encode(positional, kwargs, line, ctx),
+        "base58_decode"  => encoding::base58_decode(positional, kwargs, line, ctx),
+        "ascii85_encode" => encoding::ascii85_encode(positional, kwargs, line, ctx),
+        "ascii85_decode" => encoding::ascii85_decode(positional, kwargs, line, ctx),
+        "hex_encode"     => encoding::hex_encode(positional, kwargs, line, ctx),
+        "hex_decode"     => encoding::hex_decode(positional, kwargs, line, ctx),
+        "binary_encode"  => encoding::binary_encode(positional, kwargs, line, ctx),
+        "binary_decode"  => encoding::binary_decode(positional, kwargs, line, ctx),
+        "url_encode"     => encoding::url_encode(positional, kwargs, line, ctx),
+        "url_decode"     => encoding::url_decode(positional, kwargs, line, ctx),
+
+        // ---- hashing ----
+        "md5"     => hash::md5(positional, kwargs, line, ctx),
+        "sha1"    => hash::sha1(positional, kwargs, line, ctx),
+        "sha256"  => hash::sha256(positional, kwargs, line, ctx),
+        "sha512"  => hash::sha512(positional, kwargs, line, ctx),
+        "crc32"   => hash::crc32(positional, kwargs, line, ctx),
+        "adler32" => hash::adler32(positional, kwargs, line, ctx),
+        "fnv1a"   => hash::fnv1a(positional, kwargs, line, ctx),
+        "hmac"    => hash::hmac(positional, kwargs, line, ctx),
+        "pbkdf2"  => hash::pbkdf2(positional, kwargs, line, ctx),
+
+        // ---- classical ciphers ----
+        "caesar_encrypt"   => cipher::caesar_encrypt(positional, kwargs, line, ctx),
+        "caesar_decrypt"   => cipher::caesar_decrypt(positional, kwargs, line, ctx),
+        "rot13"            => cipher::rot13(positional, kwargs, line, ctx),
+        "rot47"            => cipher::rot47_cmd(positional, kwargs, line, ctx),
+        "atbash"           => cipher::atbash_cmd(positional, kwargs, line, ctx),
+        "affine_encrypt"   => cipher::affine_encrypt(positional, kwargs, line, ctx),
+        "affine_decrypt"   => cipher::affine_decrypt(positional, kwargs, line, ctx),
+        "vigenere_encrypt" => cipher::vigenere_encrypt(positional, kwargs, line, ctx),
+        "vigenere_decrypt" => cipher::vigenere_decrypt(positional, kwargs, line, ctx),
+        "beaufort"         => cipher::beaufort_cmd(positional, kwargs, line, ctx),
+        "autokey_encrypt"  => cipher::autokey_encrypt(positional, kwargs, line, ctx),
+        "autokey_decrypt"  => cipher::autokey_decrypt(positional, kwargs, line, ctx),
+        "playfair_encrypt"   => cipher::playfair_encrypt(positional, kwargs, line, ctx),
+        "playfair_decrypt"   => cipher::playfair_decrypt(positional, kwargs, line, ctx),
+        "rail_fence_encrypt" => cipher::rail_fence_encrypt(positional, kwargs, line, ctx),
+        "rail_fence_decrypt" => cipher::rail_fence_decrypt(positional, kwargs, line, ctx),
+        "columnar_encrypt"   => cipher::columnar_encrypt(positional, kwargs, line, ctx),
+        "columnar_decrypt"   => cipher::columnar_decrypt(positional, kwargs, line, ctx),
+        "polybius_encrypt"   => cipher::polybius_encrypt(positional, kwargs, line, ctx),
+        "polybius_decrypt"   => cipher::polybius_decrypt(positional, kwargs, line, ctx),
+        "bifid_encrypt"      => cipher::bifid_encrypt(positional, kwargs, line, ctx),
+        "bifid_decrypt"      => cipher::bifid_decrypt(positional, kwargs, line, ctx),
+        "adfgvx_encrypt"     => cipher::adfgvx_encrypt(positional, kwargs, line, ctx),
+        "adfgvx_decrypt"     => cipher::adfgvx_decrypt(positional, kwargs, line, ctx),
+        "bacon_encrypt"      => cipher::bacon_encrypt(positional, kwargs, line, ctx),
+        "bacon_decrypt"      => cipher::bacon_decrypt(positional, kwargs, line, ctx),
+        "morse_encode"       => cipher::morse_encode(positional, kwargs, line, ctx),
+        "morse_decode"       => cipher::morse_decode(positional, kwargs, line, ctx),
+        "enigma"             => enigma::enigma(positional, kwargs, line, ctx),
+        "vigenere_crack"       => cipher::vigenere_crack(positional, kwargs, line, ctx),
+        "caesar_crack"         => cipher::caesar_crack(positional, kwargs, line, ctx),
+        "index_of_coincidence" => cipher::index_of_coincidence(positional, kwargs, line, ctx),
+        "letter_frequencies"   => cipher::letter_frequencies(positional, kwargs, line, ctx),
+
+        // ---- modern ciphers ----
+        "xor_encrypt"               => modern::xor_encrypt(positional, kwargs, line, ctx),
+        "xor_decrypt"               => modern::xor_decrypt(positional, kwargs, line, ctx),
+        "rc4_encrypt"               => modern::rc4_encrypt(positional, kwargs, line, ctx),
+        "rc4_decrypt"               => modern::rc4_decrypt(positional, kwargs, line, ctx),
+        "aes_encrypt"               => modern::aes_encrypt(positional, kwargs, line, ctx),
+        "aes_decrypt"               => modern::aes_decrypt(positional, kwargs, line, ctx),
+        "chacha20_encrypt"          => modern::chacha20_encrypt(positional, kwargs, line, ctx),
+        "chacha20_decrypt"          => modern::chacha20_decrypt(positional, kwargs, line, ctx),
+        "poly1305"                  => modern::poly1305(positional, kwargs, line, ctx),
+        "chacha20_poly1305_encrypt" => modern::chacha20_poly1305_encrypt(positional, kwargs, line, ctx),
+        "chacha20_poly1305_decrypt" => modern::chacha20_poly1305_decrypt(positional, kwargs, line, ctx),
+        "encrypt"                   => modern::encrypt(positional, kwargs, line, ctx),
+        "decrypt"                   => modern::decrypt(positional, kwargs, line, ctx),
+        "random_bytes"              => modern::random_bytes(positional, kwargs, line, ctx),
+
         other => Err(RuntimeError::new(404, line, format!("unknown command `{other}`"))),
     }
+}
+
+/// `raise(message, code=500)` — fail with a user-defined error that `try/rescue` can catch.
+fn raise(args: &[Value], kwargs: &args::Kwargs, line: usize) -> Result<Value, RuntimeError> {
+    let message = args.first().map_or_else(|| "error raised".to_string(), Value::as_str);
+    let code = args::int_arg(args, 1, kwargs, "code", 500, line, "raise")?;
+    // Negative codes are reserved for the interpreter's return/break/continue signals.
+    if code <= 0 {
+        return Err(RuntimeError::new(400, line, format!("raise: `code` must be positive, got {code}")));
+    }
+    Err(RuntimeError::raised(code, line, message))
 }
